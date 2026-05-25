@@ -46,8 +46,3 @@ python presense/train/train_e2e_student.py --mode kd
 ```bash
 python presense/evaluate/evaluate_e2e.py
 ```
-
----
-
-## 🎯 최종 목표: AI 피드백 에이전트
-현재 우리 시스템은 **80% 이상의 감지 정확도**를 확보했습니다. 이제 이 엔진을 기반으로 실시간 발표 상황에서 발표자에게 **긴장도 시각화 및 행동 교정 가이드(심호흡, 말 속도 조절)**를 제공하는 '동작하는 피드백 시스템'을 완성하는 것이 이번 학기의 최종 목표입니다.
