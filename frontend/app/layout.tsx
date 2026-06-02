@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
+import { SupabaseProvider } from "@/components/supabase-provider";
 import "./globals.css";
 
 const inter = Inter({
@@ -24,7 +25,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>{children}</body>
+      <body className={`${inter.variable} ${jetbrainsMono.variable}`}>
+        <SupabaseProvider>{children}</SupabaseProvider>
+      </body>
     </html>
   );
 }

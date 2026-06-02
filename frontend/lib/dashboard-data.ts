@@ -20,3 +20,26 @@ export const agentStarters = [
   "What should I improve before the next rehearsal?",
   "How can I sound calmer during technical explanations?",
 ];
+
+export const practiceScenes = [
+  {
+    id: "camera",
+    label: "Live Camera",
+    description: "Use your real webcam preview during practice.",
+  },
+  {
+    id: "audience",
+    label: "Audience Mock",
+    description: "Simulate a small presentation audience scene.",
+  },
+  {
+    id: "interview",
+    label: "Interview Panel",
+    description: "Practice with a mock interview-style visual.",
+  },
+  {
+    id: "slides",
+    label: "Presentation Slides",
+    description: "Focus with a clean slide-style practice backdrop.",
+  },
+] as const;

@@ -10,18 +10,16 @@ import {
   Mic,
   Play,
   Sparkles,
+  Video,
   Volume2,
   Waves,
 } from "lucide-react";
-import { agentStarters, initialTimeline, postSessionHighlights } from "@/lib/dashboard-data";
+import { useSupabaseAuth } from "@/components/supabase-provider";
+import { agentStarters, initialTimeline, postSessionHighlights, practiceScenes } from "@/lib/dashboard-data";
+import { savePracticeSession } from "@/lib/supabase/data";
 
 type SessionState = "idle" | "starting" | "live" | "ended" | "error";
-
-type ChatMessage = {
-  role: "agent" | "user";
-  text: string;
-};
-
+type ChatMessage = { role: "agent" | "user"; text: string };
 type ReportSummary = {
   peak: string;
   averageStress: string;
@@ -29,44 +27,38 @@ type ReportSummary = {
   nextAction: string;
   confidence: string;
 };
+type SceneId = (typeof practiceScenes)[number]["id"];
 
-function formatSeconds(seconds: number) {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+function formatSeconds(s: number) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
 function buildAgentReply(input: string, report: ReportSummary | null) {
-  const text = input.toLowerCase();
-
-  if (text.includes("stress") || text.includes("tense")) {
-    return `The strongest pressure point appears around ${report?.peak ?? "the later middle section"}. I would focus on slowing your explanation pace and adding a short pause before key terms.`;
-  }
-
-  if (text.includes("calm") || text.includes("confidence")) {
-    return `Your current summary suggests that steadier pacing will help most. Keep sentence lengths shorter and let one point land before moving to the next.`;
-  }
-
-  if (text.includes("improve") || text.includes("next")) {
-    return report?.nextAction ?? "For the next rehearsal, focus on clearer transitions and a slightly slower delivery during dense sections.";
-  }
-
-  return "Based on this session, I would review the high-pressure explanation segment first, then rehearse one calmer transition into your technical content.";
+  const t = input.toLowerCase();
+  if (t.includes("stress") || t.includes("tense"))
+    return `The strongest pressure point appears around ${report?.peak ?? "the later middle section"}. Focus on slowing your pace and adding a short pause before key terms.`;
+  if (t.includes("calm") || t.includes("confidence"))
+    return `Steadier pacing will help most. Keep sentence lengths shorter and let one point land before moving to the next.`;
+  if (t.includes("improve") || t.includes("next"))
+    return report?.nextAction ?? "Focus on clearer transitions and a slightly slower delivery during dense sections.";
+  return "Review the high-pressure explanation segment first, then rehearse one calmer transition into your technical content.";
 }
 
 function StressChart({ series }: { series: number[] }) {
-  const maxValue = Math.max(...series, 1);
-
+  const max = Math.max(...series, 1);
   return (
-    <div className="chart-shell">
-      <div className="chart-grid" />
-      <div className="chart-area">
-        {series.map((value, index) => {
-          const height = `${Math.round((value / maxValue) * 100)}%`;
-          return <div key={`${value}-${index}`} className="chart-bar" style={{ height }} />;
-        })}
+    <div>
+      <div
+        className="stress-chart-wrap"
+        style={{ gridTemplateColumns: `repeat(${series.length}, minmax(0, 1fr))` }}
+      >
+        {series.map((v, i) => (
+          <div key={i} className="stress-bar" style={{ height: `${Math.round((v / max) * 100)}%` }} />
+        ))}
       </div>
-      <div className="chart-labels">
+      <div className="bar-chart-labels">
         <span>Opening</span>
         <span>Build-up</span>
         <span>Core content</span>
@@ -77,6 +69,8 @@ function StressChart({ series }: { series: number[] }) {
 }
 
 export function DashboardShell() {
+  const { hasEnv, user } = useSupabaseAuth();
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -92,62 +86,39 @@ export function DashboardShell() {
   const [timeline, setTimeline] = useState(initialTimeline);
   const [report, setReport] = useState<ReportSummary | null>(null);
   const [chatInput, setChatInput] = useState("");
+  const [selectedScene, setSelectedScene] = useState<SceneId>("camera");
+  const [saveStatus, setSaveStatus] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
-    {
-      role: "agent",
-      text: "After the session ends, I will summarize your performance and answer follow-up questions here.",
-    },
+    { role: "agent", text: "After the session ends, I will summarize your performance and answer follow-up questions here." },
   ]);
 
-  useEffect(() => {
-    return () => {
-      cleanupMedia();
-    };
-  }, []);
+  useEffect(() => () => { cleanupMedia(); }, []);
 
   function cleanupMedia() {
-    if (rafRef.current) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
-
-    if (tickRef.current) {
-      window.clearInterval(tickRef.current);
-      tickRef.current = null;
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      void audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    if (tickRef.current) { window.clearInterval(tickRef.current); tickRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (audioContextRef.current) { void audioContextRef.current.close(); audioContextRef.current = null; }
     analyserRef.current = null;
   }
 
   function startAudioMeter(stream: MediaStream) {
-    const context = new window.AudioContext();
-    const analyser = context.createAnalyser();
+    const ctx = new window.AudioContext();
+    const analyser = ctx.createAnalyser();
     analyser.fftSize = 512;
-
-    const source = context.createMediaStreamSource(stream);
+    const source = ctx.createMediaStreamSource(stream);
     source.connect(analyser);
-
     const data = new Uint8Array(analyser.frequencyBinCount);
-    audioContextRef.current = context;
+    audioContextRef.current = ctx;
     analyserRef.current = analyser;
 
     const sample = () => {
       analyser.getByteFrequencyData(data);
-      const average = data.reduce((sum, value) => sum + value, 0) / data.length;
-      setAudioLevel(Math.min(1, average / 120));
+      const avg = data.reduce((s, v) => s + v, 0) / data.length;
+      setAudioLevel(Math.min(1, avg / 120));
       rafRef.current = requestAnimationFrame(sample);
     };
-
     sample();
   }
 
@@ -160,337 +131,348 @@ export function DashboardShell() {
       setTimeline(initialTimeline);
       setStressScore(0.38);
       setModelConfidence(0.84);
-      setChatMessages([
-        {
-          role: "agent",
-          text: "I am waiting for the session to finish. When you end it, I will help interpret the results.",
-        },
-      ]);
+      setSaveStatus("");
+      setChatMessages([{ role: "agent", text: "Waiting for the session to finish. I will help interpret the results when you end it." }]);
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: true,
-      });
-
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
       streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
       startAudioMeter(stream);
       setSessionState("live");
 
       tickRef.current = window.setInterval(() => {
-        setElapsed((current) => current + 1);
-        setStressScore((current) => Math.max(0.16, Math.min(0.92, current + (Math.random() - 0.48) * 0.04)));
+        setElapsed((c) => c + 1);
+        setStressScore((c) => Math.max(0.16, Math.min(0.92, c + (Math.random() - 0.48) * 0.04)));
         setModelConfidence(0.74 + Math.random() * 0.18);
       }, 1500);
     } catch {
       cleanupMedia();
       setSessionState("error");
-      setErrorMessage("Camera or microphone permission was denied, so the session could not start.");
+      setErrorMessage("Camera or microphone permission was denied.");
     }
   }
 
-  function handleStopSession() {
+  async function handleStopSession() {
     cleanupMedia();
     setSessionState("ended");
 
-    const generatedTimeline = Array.from({ length: 12 }, (_, index) => {
-      const base = 32 + index * 2;
-      const variance = Math.round(Math.random() * 18);
-      return Math.min(86, base + variance);
-    });
+    const gen = Array.from({ length: 12 }, (_, i) => Math.min(86, 32 + i * 2 + Math.round(Math.random() * 18)));
+    const avg = gen.reduce((s, v) => s + v, 0) / gen.length / 100;
+    const peak = Math.max(...gen);
+    setTimeline(gen);
 
-    const average = generatedTimeline.reduce((sum, value) => sum + value, 0) / generatedTimeline.length / 100;
-    const peak = Math.max(...generatedTimeline);
-
-    setTimeline(generatedTimeline);
-
-    const nextReport = {
+    const nextReport: ReportSummary = {
       peak: `${peak}% around the technical middle section`,
-      averageStress: `${average.toFixed(2)} / 1.00`,
+      averageStress: `${avg.toFixed(2)} / 1.00`,
       speakingState: peak > 70 ? "Noticeable mid-session pressure" : "Mostly stable delivery",
       nextAction: "Practice slower transitions between your main explanation blocks and leave a short pause after each key term.",
       confidence: `${Math.round(modelConfidence * 100)}%`,
     };
 
     setReport(nextReport);
-    setChatMessages([
-      {
-        role: "agent",
-        text: `Your session summary is ready. The biggest improvement area is this: ${nextReport.nextAction}`,
-      },
-    ]);
+    setChatMessages([{ role: "agent", text: `Session summary ready. Biggest improvement area: ${nextReport.nextAction}` }]);
+
+    if (!hasEnv || !user) { setSaveStatus("Supabase not connected — session saved locally only."); return; }
+
+    try {
+      await savePracticeSession({
+        durationSeconds: elapsed,
+        averageStress: avg,
+        result: nextReport.speakingState,
+        diagnosis: `Peak pressure reached ${nextReport.peak}.`,
+        nextAction: nextReport.nextAction,
+        sceneLabel: activeScene.label,
+      });
+      setSaveStatus("Session saved to your account.");
+    } catch (error) {
+      setSaveStatus(error instanceof Error ? error.message : "Failed to save session.");
+    }
   }
 
   function handleSendMessage() {
-    if (!chatInput.trim() || sessionState !== "ended") {
-      return;
-    }
-
-    const userMessage = chatInput.trim();
-    const reply = buildAgentReply(userMessage, report);
-
-    setChatMessages((prev) => [
-      ...prev,
-      { role: "user", text: userMessage },
-      { role: "agent", text: reply },
-    ]);
+    if (!chatInput.trim() || sessionState !== "ended") return;
+    const userText = chatInput.trim();
+    const reply = buildAgentReply(userText, report);
+    setChatMessages((prev) => [...prev, { role: "user", text: userText }, { role: "agent", text: reply }]);
     setChatInput("");
   }
 
   const audioPercent = Math.round(audioLevel * 100);
   const confidencePercent = Math.round(modelConfidence * 100);
+  const activeScene = practiceScenes.find((s) => s.id === selectedScene) ?? practiceScenes[0];
+
+  const stateLabel =
+    sessionState === "live" ? "Live — Practice in progress" :
+    sessionState === "ended" ? "Session completed" :
+    sessionState === "starting" ? "Starting…" :
+    sessionState === "error" ? "Permission needed" :
+    "Ready to start";
+
+  const stateChipClass =
+    sessionState === "live" ? "chip-live" :
+    sessionState === "ended" ? "chip-ended" :
+    sessionState === "error" ? "chip-error" :
+    "chip-idle";
 
   return (
-    <main className="page-shell">
-      <section className="hero-card">
-        <div className="hero-copy-block">
-          <p className="eyebrow">PreSense Practice Service</p>
-          <h1>Quiet during practice, helpful after the session ends</h1>
-          <p className="hero-copy">
-            This UI is now designed like a real service. During the presentation, it stays calm and
-            minimally distracting. After the user presses `End Session`, it reveals a full diagnosis,
-            a summary timeline, and an AI Agent chat area for follow-up questions.
-          </p>
-          <div className="hero-actions">
-            <button
-              type="button"
-              className="primary-button"
-              onClick={handleStartSession}
-              disabled={sessionState === "starting" || sessionState === "live"}
-            >
-              <Play size={16} />
-              Start Session
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={handleStopSession}
-              disabled={sessionState !== "live"}
-            >
-              <CircleStop size={16} />
-              End Session
-            </button>
-          </div>
-          <div className="hero-badges">
-            <span>
-              <Camera size={16} />
-              Camera active in background
-            </span>
-            <span>
-              <Mic size={16} />
-              Voice input active
-            </span>
-            <span>
-              <BrainCircuit size={16} />
-              Frontend ready for model API
-            </span>
-          </div>
-          {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+    <main className="page-content">
+      <div className="page-top">
+        <div>
+          <h1 className="page-title">Practice Session</h1>
+          <p className="page-subtitle">Quiet during practice — full analysis revealed after you finish.</p>
         </div>
-
-        <div className="session-rail">
-          <div className={`session-status ${sessionState}`}>
-            <span className="live-dot" />
-            {sessionState === "live"
-              ? "Practice in progress"
-              : sessionState === "ended"
-                ? "Session completed"
-                : sessionState === "starting"
-                  ? "Starting session"
-                  : sessionState === "error"
-                    ? "Permission needed"
-                    : "Ready to practice"}
-          </div>
-
-          <div className="video-preview calm-preview">
-            <div className="preview-grid" />
-            <div className="preview-center preview-poster">
-              <div className="poster-badge">Placeholder Scene</div>
-              <h2>Practice Focus Screen</h2>
-              <p>
-                Replace this area later with your own image, prompt card, or presentation practice
-                visual instead of showing the user&apos;s live face on screen.
-              </p>
-            </div>
-          </div>
-
-          <div className="signal-strip">
-            <div className="signal-pill">
-              <span>Camera Permission</span>
-              <strong className={sessionState === "live" || sessionState === "ended" ? "tone-ok" : "tone-data"}>
-                {sessionState === "live" || sessionState === "ended" ? "Granted" : "Standby"}
-              </strong>
-            </div>
-            <div className="signal-pill">
-              <span>Microphone Activity</span>
-              <strong className={audioPercent > 8 ? "tone-ok" : "tone-data"}>{audioPercent}%</strong>
-            </div>
-            <div className="signal-pill">
-              <span>Elapsed Time</span>
-              <strong className="tone-data">{formatSeconds(elapsed)}</strong>
-            </div>
-            <div className="signal-pill">
-              <span>Model Confidence Slot</span>
-              <strong className="tone-ok">{confidencePercent}%</strong>
-            </div>
-          </div>
+        <div className="page-actions">
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={handleStopSession}
+            disabled={sessionState !== "live"}
+          >
+            <CircleStop size={14} />
+            End Session
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleStartSession}
+            disabled={sessionState === "starting" || sessionState === "live"}
+          >
+            <Play size={14} />
+            Start Session
+          </button>
         </div>
-      </section>
+      </div>
 
-      <section className="kpi-grid">
-        <article className="panel">
-          <div className="panel-heading">
-            <span>Session Mode</span>
-            <Gauge size={18} />
-          </div>
-          <div className="metric-line">
-            <strong>{sessionState === "live" ? "LIVE" : sessionState === "ended" ? "DONE" : "READY"}</strong>
-            <span>state</span>
-          </div>
-          <p className="delta delta-data">The interface stays quiet while the presenter is speaking.</p>
-        </article>
-
-        <article className="panel">
-          <div className="panel-heading">
-            <span>Voice Activity</span>
-            <Volume2 size={18} />
-          </div>
-          <div className="metric-line">
-            <strong>{audioPercent}</strong>
-            <span>%</span>
-          </div>
-          <p className="delta delta-ok">Live microphone meter only, without distracting coaching updates.</p>
-        </article>
-
-        <article className="panel">
-          <div className="panel-heading">
-            <span>Report Status</span>
-            <BrainCircuit size={18} />
-          </div>
-          <div className="metric-line">
-            <strong>{sessionState === "ended" ? "READY" : "WAIT"}</strong>
-            <span>summary</span>
-          </div>
-          <p className="delta delta-data">Detailed diagnosis appears only after the session is finished.</p>
-        </article>
-      </section>
-
-      {sessionState === "ended" ? (
-        <section className="dashboard-grid">
-          <article className="panel panel-chart">
-            <div className="panel-heading">
-              <span>Session Timeline</span>
-              <Waves size={18} />
-            </div>
-            <div className="panel-title-row">
-              <h2>Post-session stress overview</h2>
-              <span className="live-chip">Generated after finish</span>
-            </div>
-            <p className="section-standalone">
-              Instead of moving every second, the timeline is revealed once the rehearsal ends so
-              the user can review the entire presentation calmly.
-            </p>
-            <StressChart series={timeline} />
-          </article>
-
-          <aside className="panel panel-diagnosis">
-            <div className="panel-heading">
-              <span>Diagnosis Result</span>
-              <Sparkles size={18} />
-            </div>
-            <div className="coach-stack">
-              <article className="coach-card coach-alert">
-                <h3>Overall Judgment</h3>
-                <p>{report?.speakingState}</p>
-              </article>
-              <article className="coach-card coach-data">
-                <h3>Peak Pressure Point</h3>
-                <p>{report?.peak}</p>
-              </article>
-              <article className="coach-card coach-ok">
-                <h3>Recommended Next Step</h3>
-                <p>{report?.nextAction}</p>
-              </article>
-            </div>
-          </aside>
-
-          <article className="panel panel-report">
-            <div className="panel-heading">
-              <span>Session Summary</span>
-              <BrainCircuit size={18} />
-            </div>
-            <div className="section-copy">
-              <h2>What to improve before the next rehearsal</h2>
-              <p>
-                The report is intentionally shown after completion so the presenter can focus first
-                on delivering the talk, then on reviewing the results.
-              </p>
-            </div>
-            <div className="report-grid">
-              <article className="report-card">
-                <span>Average Stress</span>
-                <strong>{report?.averageStress}</strong>
-                <p>This gives a session-level picture instead of distracting you with momentary noise.</p>
-              </article>
-              <article className="report-card">
-                <span>Model Confidence</span>
-                <strong>{report?.confidence}</strong>
-                <p>Reserved for the current student model output once the backend inference route is attached.</p>
-              </article>
-              <article className="report-card">
-                <span>Next Rehearsal Goal</span>
-                <strong>Slow transitions</strong>
-                <p>{report?.nextAction}</p>
-              </article>
-            </div>
-            <div className="highlight-list">
-              {postSessionHighlights.map((item) => (
-                <article key={item.title} className="highlight-card">
-                  <h3>{item.title}</h3>
-                  <p>{item.detail}</p>
-                </article>
-              ))}
-            </div>
-          </article>
-
-          <article className="panel panel-agent">
-            <div className="panel-heading">
-              <span>AI Agent</span>
-              <MessageSquareText size={18} />
-            </div>
-            <div className="section-copy">
-              <h2>Ask follow-up questions about this result</h2>
-              <p>
-                This is frontend-only for now. The chat UI is ready, and later you can connect it to
-                a real agent once you have the API key and backend route.
-              </p>
-            </div>
-            <div className="starter-row">
-              {agentStarters.map((starter) => (
-                <button key={starter} type="button" className="starter-pill" onClick={() => setChatInput(starter)}>
-                  {starter}
-                </button>
-              ))}
-            </div>
-            <div className="chat-shell">
-              {chatMessages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className={`chat-bubble ${message.role}`}>
-                  {message.text}
+      {/* Session layout: video + controls */}
+      <div className="session-grid" style={{ marginBottom: 14 }}>
+        {/* Left: video + scene chips */}
+        <div>
+          <div className="video-box">
+            {selectedScene === "camera" ? (
+              <>
+                <video ref={videoRef} autoPlay muted playsInline />
+                <div className="video-overlay">
+                  <span className={`status-chip ${stateChipClass}`}>
+                    <span className="status-dot" />
+                    {stateLabel}
+                  </span>
+                  <span style={{ fontSize: 12, opacity: 0.8 }}>{formatSeconds(elapsed)}</span>
                 </div>
-              ))}
-            </div>
-            <div className="chat-input-row">
-              <input
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                placeholder="Ask the AI Agent about your presentation result"
-              />
-              <button type="button" className="primary-button" onClick={handleSendMessage}>
-                Ask
+              </>
+            ) : (
+              <div className="video-placeholder">
+                <Video size={40} />
+                <div style={{ fontWeight: 600, fontSize: 16 }}>{activeScene.label}</div>
+                <div style={{ fontSize: 13, textAlign: "center", maxWidth: "30ch" }}>{activeScene.description}</div>
+                <div className="video-overlay">
+                  <span className={`status-chip ${stateChipClass}`}>
+                    <span className="status-dot" />
+                    {stateLabel}
+                  </span>
+                  <span style={{ fontSize: 12, opacity: 0.8 }}>{formatSeconds(elapsed)}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="scene-chips">
+            {practiceScenes.map((scene) => (
+              <button
+                key={scene.id}
+                type="button"
+                className={`scene-chip${selectedScene === scene.id ? " active" : ""}`}
+                onClick={() => setSelectedScene(scene.id)}
+              >
+                {scene.label}
               </button>
+            ))}
+          </div>
+
+          {errorMessage && <p className="error-msg" style={{ marginTop: 10 }}>{errorMessage}</p>}
+          {saveStatus && <p className="success-msg" style={{ marginTop: 10 }}>{saveStatus}</p>}
+        </div>
+
+        {/* Right: signal cards */}
+        <div className="signal-grid" style={{ alignContent: "start" }}>
+          <div className="signal-card">
+            <div className="signal-label">Session Mode</div>
+            <div className={`signal-value ${sessionState === "live" ? "ok" : sessionState === "error" ? "alert" : "data"}`}>
+              {sessionState === "live" ? "LIVE" : sessionState === "ended" ? "DONE" : "READY"}
             </div>
-          </article>
-        </section>
-      ) : null}
+          </div>
+
+          <div className="signal-card">
+            <div className="signal-label">Elapsed Time</div>
+            <div className="signal-value data">{formatSeconds(elapsed)}</div>
+          </div>
+
+          <div className="signal-card">
+            <div className="signal-label">
+              <Mic size={11} style={{ display: "inline", marginRight: 4 }} />
+              Mic Activity
+            </div>
+            <div className={`signal-value ${audioPercent > 8 ? "ok" : "data"}`}>{audioPercent}%</div>
+          </div>
+
+          <div className="signal-card">
+            <div className="signal-label">
+              <Camera size={11} style={{ display: "inline", marginRight: 4 }} />
+              Camera
+            </div>
+            <div className={`signal-value ${sessionState === "live" || sessionState === "ended" ? "ok" : "data"}`}>
+              {sessionState === "live" || sessionState === "ended" ? "ON" : "STBY"}
+            </div>
+          </div>
+
+          <div className="signal-card">
+            <div className="signal-label">
+              <BrainCircuit size={11} style={{ display: "inline", marginRight: 4 }} />
+              Model Confidence
+            </div>
+            <div className="signal-value ok">{sessionState === "live" ? `${confidencePercent}%` : "—"}</div>
+          </div>
+
+          <div className="signal-card">
+            <div className="signal-label">
+              <Gauge size={11} style={{ display: "inline", marginRight: 4 }} />
+              Live Stress
+            </div>
+            <div className={`signal-value ${sessionState === "live" ? (stressScore > 0.65 ? "alert" : "ok") : "data"}`}>
+              {sessionState === "live" ? stressScore.toFixed(2) : "—"}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Post-session analysis */}
+      {sessionState === "ended" && (
+        <>
+          {/* Stress timeline + diagnosis */}
+          <div className="dash-grid" style={{ marginBottom: 14 }}>
+            <div className="card">
+              <div className="panel-head">
+                <div className="panel-head-left">
+                  <span className="panel-title">Session Stress Timeline</span>
+                  <span className="panel-subtitle">Post-session overview</span>
+                </div>
+                <Waves size={16} color="var(--text-secondary)" />
+              </div>
+              <StressChart series={timeline} />
+            </div>
+
+            <div className="card">
+              <div className="panel-head">
+                <div className="panel-head-left">
+                  <span className="panel-title">Diagnosis</span>
+                  <span className="panel-subtitle">AI analysis result</span>
+                </div>
+                <Sparkles size={16} color="var(--text-secondary)" />
+              </div>
+              <div className="coach-stack">
+                <div className="coach-card coach-alert">
+                  <h3>Overall Judgment</h3>
+                  <p>{report?.speakingState}</p>
+                </div>
+                <div className="coach-card coach-data">
+                  <h3>Peak Pressure Point</h3>
+                  <p>{report?.peak}</p>
+                </div>
+                <div className="coach-card coach-ok">
+                  <h3>Recommended Next Step</h3>
+                  <p>{report?.nextAction}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Summary + AI chat */}
+          <div className="dash-grid">
+            <div className="card">
+              <div className="panel-head">
+                <div className="panel-head-left">
+                  <span className="panel-title">Session Summary</span>
+                  <span className="panel-subtitle">What to improve next rehearsal</span>
+                </div>
+                <BrainCircuit size={16} color="var(--text-secondary)" />
+              </div>
+
+              <div className="report-grid">
+                <div className="report-card">
+                  <div className="rc-label">Average Stress</div>
+                  <div className="rc-value">{report?.averageStress}</div>
+                  <div className="rc-desc">Session-level picture without momentary noise.</div>
+                </div>
+                <div className="report-card">
+                  <div className="rc-label">Model Confidence</div>
+                  <div className="rc-value">{report?.confidence}</div>
+                  <div className="rc-desc">Student model output — backend inference ready.</div>
+                </div>
+                <div className="report-card">
+                  <div className="rc-label">Next Goal</div>
+                  <div className="rc-value" style={{ fontSize: 15, lineHeight: 1.3 }}>Slow transitions</div>
+                  <div className="rc-desc">{report?.nextAction}</div>
+                </div>
+                <div className="report-card">
+                  <div className="rc-label">Scene Used</div>
+                  <div className="rc-value" style={{ fontSize: 15, lineHeight: 1.3 }}>{activeScene.label}</div>
+                  <div className="rc-desc">Practice environment for this session.</div>
+                </div>
+              </div>
+
+              <div className="highlight-list">
+                {postSessionHighlights.map((item) => (
+                  <div key={item.title} className="highlight-card">
+                    <h3>{item.title}</h3>
+                    <p>{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="panel-head">
+                <div className="panel-head-left">
+                  <span className="panel-title">AI Agent</span>
+                  <span className="panel-subtitle">Ask follow-up questions</span>
+                </div>
+                <MessageSquareText size={16} color="var(--text-secondary)" />
+              </div>
+
+              <div className="starter-pills">
+                {agentStarters.map((s) => (
+                  <button key={s} type="button" className="starter-pill" onClick={() => setChatInput(s)}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+
+              <div className="chat-messages">
+                {chatMessages.map((m, i) => (
+                  <div key={i} className={`chat-bubble ${m.role}`}>{m.text}</div>
+                ))}
+              </div>
+
+              <div className="chat-input-row">
+                <input
+                  className="chat-input"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSendMessage(); }}
+                  placeholder="Ask about your session result…"
+                />
+                <button type="button" className="btn btn-primary" onClick={handleSendMessage}>
+                  Ask
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </main>
   );
 }
