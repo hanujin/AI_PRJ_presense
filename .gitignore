@@ -15,3 +15,14 @@ __pycache__/
 .Trashes
 ehthumbs.db
 Thumbs.db
+design.md
+proposal.docx
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+.env
+.env.example
+.env.local
