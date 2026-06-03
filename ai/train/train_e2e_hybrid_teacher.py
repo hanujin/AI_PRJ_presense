@@ -4,29 +4,27 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
 import sys
 from pathlib import Path
-import argparse
 import time
 from sklearn.model_selection import GroupShuffleSplit
 
 # presense 폴더를 path에 추가
 # Reorganized: presense root and subfolders added to path
-import sys
-from pathlib import Path
-_root = Path(__file__).resolve().parent.parent
-for p in [_root, _root/'data', _root/'models', _root/'train', _root/'evaluate', _root/'analysis']:
+_root = Path(__file__).resolve().parent.parent.parent
+_ai_root = _root / 'ai'
+for p in [_root, _ai_root, _ai_root/'data', _ai_root/'models', _ai_root/'train', _ai_root/'evaluate', _ai_root/'feature_analysis']:
     if str(p) not in sys.path: sys.path.insert(0, str(p))
 
 import config
-from models_e2e import HybridE2EModel, E2EStudentModel
+from models_e2e import HybridE2EModel
 from dataset_e2e import StressIDRawDataset, build_sample_list
 from dataset import load_labels
 from train import get_device, accuracy, save_checkpoint, EarlyStopping
 from kd_loss import TotalKDLoss
 
-def train_e2e_hybrid_student(mode='kd', epochs=50, batch_size=2):
+def train_e2e_hybrid(epochs=50, batch_size=2):
     device = get_device()
-    TASK = 'binary' 
-    print(f"🌀 Hybrid E2E Student {mode} 학습 시작 (Device: {device})")
+    TASK = 'binary'
+    print(f"🌀 Hybrid E2E 학습 시작 (Task: {TASK}, Device: {device})")
 
     # 1. 데이터 준비
     labels_df = load_labels(task=TASK, fallback=True)
@@ -45,69 +43,50 @@ def train_e2e_hybrid_student(mode='kd', epochs=50, batch_size=2):
     val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
     # 2. 모델 로드 및 설정
-    teacher = HybridE2EModel(num_classes=2).to(device)
-    teacher_path = config.CHECKPOINTS_DIR / TASK / "e2e_hybrid_best.pt"
-    
-    if not teacher_path.exists():
-        print(f"❌ Teacher 모델 없음: {teacher_path}")
-        return
-
-    teacher.load_state_dict(torch.load(teacher_path, map_location=device)['model_state_dict'])
-    teacher.eval()
-    for p in teacher.parameters(): p.requires_grad = False
-    
-    student = E2EStudentModel(num_classes=2).to(device)
-    optimizer = optim.Adam(student.parameters(), lr=1e-4)
+    model = HybridE2EModel(num_classes=2).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     criterion = nn.CrossEntropyLoss()
-    kd_loss_fn = TotalKDLoss(arch='e2e')
     early_stop = EarlyStopping(patience=7)
 
     save_dir = config.CHECKPOINTS_DIR / TASK
     save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = str(save_dir / f"student_{mode}_hybrid_{TASK}_best.pt")
+    save_path = str(save_dir / "e2e_hybrid_best.pt")
 
     # 3. 학습 루프
     for epoch in range(1, epochs + 1):
-        student.train()
+        model.train()
         t_loss, t_acc, n = 0, 0, 0
         t0 = time.time()
         
         for i, (frames, audio, physio, labels) in enumerate(train_loader):
             frames, audio, physio, labels = [b.to(device) for b in (frames, audio, physio, labels)]
             
-            with torch.no_grad():
-                t_logits, t_phys_emb, t_video_emb, t_audio_emb = teacher(frames, audio, physio)
-                
-            s_logits, s_video_emb, s_audio_emb = student(frames, audio)
-            
-            if mode == 'kd':
-                loss, _ = kd_loss_fn(t_logits, s_logits, labels, t_video_emb, t_audio_emb, s_video_emb, s_audio_emb)
-            else:
-                loss = criterion(s_logits, labels)
+            logits, *_ = model(frames, audio, physio)
+            loss = criterion(logits, labels)
             
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
             t_loss += loss.item()
-            t_acc += accuracy(s_logits, labels)
+            t_acc += accuracy(logits, labels)
             n += 1
             
             if (i + 1) % 10 == 0 or (i + 1) == len(train_loader):
-                print(f"  Batch {i+1:3d}/{len(train_loader)} | Loss: {loss.item():.4f} | Acc: {accuracy(s_logits, labels):.4f}")
+                print(f"  Batch {i+1:3d}/{len(train_loader)} | Loss: {loss.item():.4f} | Acc: {accuracy(logits, labels):.4f}")
             
         t_loss /= n
         t_acc /= n
         
         # Validation
-        student.eval()
+        model.eval()
         v_loss, v_acc, vn = 0, 0, 0
         with torch.no_grad():
-            for frames, audio, _, labels in val_loader:
-                frames, audio, labels = [b.to(device) for b in (frames, audio, labels)]
-                s_logits, *_ = student(frames, audio)
-                v_loss += criterion(s_logits, labels).item()
-                v_acc += accuracy(s_logits, labels)
+            for frames, audio, physio, labels in val_loader:
+                frames, audio, physio, labels = [b.to(device) for b in (frames, audio, physio, labels)]
+                logits, *_ = model(frames, audio, physio)
+                v_loss += criterion(logits, labels).item()
+                v_acc += accuracy(logits, labels)
                 vn += 1
         v_loss /= vn
         v_acc /= vn
@@ -117,7 +96,7 @@ def train_e2e_hybrid_student(mode='kd', epochs=50, batch_size=2):
         # 모델 저장 및 조기 종료
         if v_loss < early_stop.best_loss:
             print(f"💾 최고 성능 갱신! 모델 저장 중: {Path(save_path).name}")
-            save_checkpoint(student, optimizer, epoch, v_loss, save_path)
+            save_checkpoint(model, optimizer, epoch, v_loss, save_path)
             
         if early_stop(v_loss):
             print("🛑 조기 종료 (Early Stopping) 발생")
@@ -126,7 +105,4 @@ def train_e2e_hybrid_student(mode='kd', epochs=50, batch_size=2):
     print(f"\n✅ 학습 완료: {save_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, default='kd', choices=['kd', 'baseline'])
-    args = parser.parse_args()
-    train_e2e_hybrid_student(mode=args.mode)
+    train_e2e_hybrid()

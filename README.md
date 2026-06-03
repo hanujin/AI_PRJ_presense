@@ -6,43 +6,46 @@
 
 ## 📂 프로젝트 구조 (Directory Structure)
 
-모든 소스코드는 기능에 따라 5개의 폴더로 관리됩니다.
+모든 소스코드는 기능에 따라 크게 **연구용 엔진(`ai/`)**과 **실시간 에이전트(`agent/`)**로 관리됩니다.
 
-### 1. `data/` (데이터 처리)
-*   `dataset.py`: 요약된 통계 피처(Handcrafted) 데이터를 로드하고 전처리합니다.
-*   `dataset_e2e.py`: 비디오 프레임, 오디오 파형, 생리 신호 시계열 원본 데이터를 처리합니다.
+### 1. 🧠 AI 연구 엔진 (`ai/`)
+*   **`data/`**: 영상, 음성, 생리 신호 데이터셋 로드 및 전처리 (`dataset_e2e.py` 등).
+*   **`models/`**: 하이브리드 모델 구조(ResNet + Wav2Vec) 및 지식 증류 손실 함수 정의.
+*   **`train/`**: Teacher/Student 모델 학습 및 KD 전수 스크립트.
+*   **`evaluate/`**: 학습된 모델의 성능 평가 및 결과 분석.
+*   **`feature_analysis/`**: 주요 피처 기여도 분석 및 시각화.
 
-### 2. `models/` (모델 정의)
-*   `models.py`: 표준 MLP 및 LSTM 기반의 모델 구조가 정의되어 있습니다.
-*   `models_e2e.py`: ResNet, Wav2Vec 2.0, 1D-CNN 등이 결합된 하위 하이브리드 모델 구조입니다.
-*   `kd_loss.py`: 지식 증류를 위한 Soft Label 및 Feature KD 손실 함수를 포함합니다.
-
-### 3. `train/` (학습 스크립트)
-*   `train_e2e_teacher.py` / `train_e2e_hybrid_teacher.py`: 모든 모달리티를 사용하는 고성능 Teacher 모델을 학습합니다.
-*   `train_e2e_student.py`: Teacher의 지식을 전수받는 배포용 Student 모델을 학습합니다. (`--mode kd` 옵션 사용)
-*   `train_pca_teacher.py` / `train_pca_student.py`: PCA로 압축된 고효율 데이터를 사용하는 모델을 학습합니다.
-
-### 4. `evaluate/` (성능 평가)
-*   `evaluate_e2e.py`: 가장 고도화된 Arch 1(E2E/Hybrid) 모델들의 성능을 통합 평가하고 혼동 행렬을 생성합니다.
-*   `evaluate.py`: MLP, LSTM 및 PCA 기반 모델들의 성능 비교 리포트를 생성합니다.
-
-### 5. `feature_analysis/` (데이터 분석)
-*   `analyze_features.py`: 어떤 피처가 스트레스 감지에 중요한지(호흡, 심박 등) 분석하고 시각화합니다.
-*   `analyze_pca.py` / `analyze_pca_components.py`: 데이터 압축 효율 및 압축된 성분의 의미를 분석합니다.
-*   `results/`: 피처 중요도(`feature_importance.csv`)와 압축된 피처셋(`final_features.csv`)이 저장됩니다.
+### 2. 🤖 실시간 에이전트 (`agent/`)
+*   **`core.py`**: 실시간 웹캠 및 마이크 데이터 스트리밍.
+*   **`model_wrapper.py`**: 학습된 모델을 이용한 실시간 스트레스 추론.
+*   **`feedback_engine.py`**: 적응형 영점 조절 및 지능형 피드백 생성.
+*   **`agent_main.py`**: 실시간 자막 오버레이 프리뷰 및 통합 가동.
 
 ---
 
 ## 🚀 빠른 시작 가이드 (Quick Start)
 
-### 1. 모델 학습
-가장 성능이 뛰어난 하이브리드 학생 모델을 학습시키려면 아래 명령어를 사용하세요.
+### 1. 실시간 에이전트 실행 (MVP 시연)
+가장 선명한 화질과 실시간 자막 피드백을 확인하려면 아래 명령어를 사용하세요.
 ```bash
-python presense/train/train_e2e_student.py --mode kd
+python presense/agent/agent_main.py
+```
+*   **'c' 키**: 현재 상태를 기준으로 영점 조절 (Calibration).
+*   **'q' 키**: 프로그램 종료.
+
+### 2. 모델 학습 (연구용)
+하이브리드 학생 모델을 다시 학습시키려면 아래 명령어를 사용하세요.
+```bash
+python presense/ai/train/train_e2e_student.py --mode kd
 ```
 
-### 2. 성능 확인
-학습된 모델들의 최종 정확도와 성적표를 확인하려면 아래 명령어를 사용하세요.
-```bash
-python presense/evaluate/evaluate_e2e.py
-```
+---
+
+## 🛠️ AI 피드백 에이전트 개발 로드맵 (Phase 2)
+
+2학기에는 현재의 독립형 엔진을 웹 프론트엔드와 통합하여 완성된 서비스를 구축할 계획입니다.
+
+*   **시스템 통합**: FastAPI 및 WebSocket을 이용한 분석 엔진-웹 UI 실시간 연동.
+*   **행동 분석 고도화**: 눈 깜빡임, 발화 속도, 추임새 빈도 등 멀티모달 행동 지표 추가.
+*   **맥락 인지 코칭**: 발표 시간 및 트렌드에 따른 맞춤형 원인 분석 피드백 제공.
+*   **최종 검증**: 실제 유저 테스트를 통한 스트레스 저감 효과 통계적 입증.

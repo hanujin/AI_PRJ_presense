@@ -16,10 +16,10 @@ from pathlib import Path
 
 import sys
 # Reorganized: presense root and subfolders added to path
-import sys
 from pathlib import Path
-_root = Path(__file__).resolve().parent.parent
-for p in [_root, _root/'data', _root/'models', _root/'train', _root/'evaluate', _root/'analysis']:
+_root = Path(__file__).resolve().parent.parent.parent
+_ai_root = _root / 'ai'
+for p in [_root, _ai_root, _ai_root/'data', _ai_root/'models', _ai_root/'train', _ai_root/'evaluate', _ai_root/'feature_analysis']:
     if str(p) not in sys.path: sys.path.insert(0, str(p))
 import config
 from models.kd_loss import TotalKDLoss
