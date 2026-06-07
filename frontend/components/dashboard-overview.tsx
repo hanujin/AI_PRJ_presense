@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Activity, BrainCircuit, CalendarDays, FolderClock, MoreHorizontal, Play, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp } from "lucide-react";
+import { Activity, BrainCircuit, CalendarDays, Clock, FolderClock, MoreHorizontal, Play, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { loadDashboardData, type DiagnosisRecord, type PresentationRecord } from "@/lib/supabase/data";
 
@@ -50,12 +50,145 @@ function StressTrend({ records }: { records: PresentationRecord[] }) {
   );
 }
 
+function StressBar({ percent, color }: { percent: number; color: string }) {
+  return (
+    <div style={{ background: "var(--border)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+      <div style={{ height: "100%", borderRadius: 4, width: `${percent}%`, background: color, transition: "width 0.5s ease" }} />
+    </div>
+  );
+}
+
+function ReviewModal({ record, onClose, severityClass }: { record: PresentationRecord; onClose: () => void; severityClass: (r: string) => string }) {
+  const stressValue = parseFloat(record.stressAverage);
+  const stressPercent = Math.round(stressValue * 100);
+  const stressColor = stressPercent > 65 ? "#ef4444" : stressPercent > 45 ? "#f59e0b" : "#22c55e";
+  const stressLabel = stressPercent > 65 ? "High" : stressPercent > 45 ? "Moderate" : "Low";
+
+  const simulatedBars = (() => {
+    const base = stressValue;
+    return [
+      Math.min(1, base * 0.72),
+      Math.min(1, base * 1.05),
+      Math.min(1, base * 1.28),
+      Math.min(1, base * 0.95),
+    ];
+  })();
+  const barMax = Math.max(...simulatedBars, 0.01);
+
+  return (
+    <div
+      style={{
+        position: "fixed", inset: 0, zIndex: 50,
+        background: "rgba(0,0,0,0.6)", display: "flex",
+        alignItems: "center", justifyContent: "center", padding: 24,
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="card"
+        style={{ width: "100%", maxWidth: 580, maxHeight: "92vh", overflowY: "auto", position: "relative" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Close */}
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ position: "absolute", top: 16, right: 16, background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", display: "flex" }}
+        >
+          <X size={18} />
+        </button>
+
+        {/* Header */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Session Review</div>
+          <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>{record.title}</div>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
+              <CalendarDays size={11} />{record.date}
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
+              <Clock size={11} />{record.duration}
+            </span>
+            {record.sceneLabel && (
+              <span style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
+                <Activity size={11} />{record.sceneLabel}
+              </span>
+            )}
+            <span className={`severity-pill ${severityClass(record.result)}`}>{record.result}</span>
+          </div>
+        </div>
+
+        {/* Stress metrics */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div className="report-card">
+            <div className="rc-label">Average Stress Score</div>
+            <div className="rc-value" style={{ color: stressColor }}>{record.stressAverage}</div>
+            <div className="rc-desc" style={{ marginBottom: 8 }}>Out of 1.00 — {stressLabel} pressure</div>
+            <StressBar percent={stressPercent} color={stressColor} />
+          </div>
+          <div className="report-card">
+            <div className="rc-label">Stress Phase Breakdown</div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height: 52, marginTop: 8, marginBottom: 8 }}>
+              {simulatedBars.map((v, i) => (
+                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                  <div style={{ width: "100%", background: stressColor, borderRadius: "3px 3px 0 0", opacity: 0.75 + i * 0.06, height: `${Math.round((v / barMax) * 48)}px` }} />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--text-secondary)" }}>
+              <span>Open</span><span>Build</span><span>Core</span><span>Close</span>
+            </div>
+          </div>
+        </div>
+
+        {/* AI Diagnosis */}
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <Sparkles size={13} color="var(--accent)" /> AI Diagnosis
+          </div>
+          <div className="coach-stack" style={{ gap: 8 }}>
+            <div className="coach-card coach-alert">
+              <h3>Overall Judgment</h3>
+              <p>{record.result}</p>
+            </div>
+            <div className="coach-card coach-data">
+              <h3>Peak Pressure Analysis</h3>
+              <p>{record.diagnosis || "No diagnosis recorded."}</p>
+            </div>
+            {record.nextAction && (
+              <div className="coach-card coach-ok">
+                <h3>Recommended Next Step</h3>
+                <p>{record.nextAction}</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Coaching tips based on stress level */}
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+            <BrainCircuit size={13} color="var(--accent)" /> Coaching Insight
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7, background: "var(--surface-2, var(--border))", borderRadius: 8, padding: "12px 14px" }}>
+            {stressPercent > 65
+              ? "High stress detected — focus on slowing down between major points. Insert deliberate pauses (1–2 seconds) after each key term to allow the audience to absorb information and give yourself time to reset."
+              : stressPercent > 45
+              ? "Moderate stress detected — your baseline is acceptable but there were noticeable pressure spikes. Work on keeping a consistent pace in the mid-session core content where tension tends to build."
+              : "Low stress detected — delivery was stable. To improve further, focus on expressive variation: deliberate emphasis on key terms will make your presentation more engaging without raising anxiety."}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function DashboardOverview() {
   const { hasEnv, user } = useSupabaseAuth();
   const [presentationRecords, setPresentationRecords] = useState<PresentationRecord[]>([]);
   const [diagnosisHistory, setDiagnosisHistory] = useState<DiagnosisRecord[]>([]);
   const [isLoading, setIsLoading] = useState(hasEnv);
   const [loadError, setLoadError] = useState("");
+  const [selectedRecord, setSelectedRecord] = useState<PresentationRecord | null>(null);
 
   useEffect(() => {
     if (!hasEnv || !user) {
@@ -101,6 +234,14 @@ export function DashboardOverview() {
   }
 
   return (
+    <>
+    {selectedRecord && (
+      <ReviewModal
+        record={selectedRecord}
+        onClose={() => setSelectedRecord(null)}
+        severityClass={severityClass}
+      />
+    )}
     <main className="page-content">
       <div className="page-top">
         <div>
@@ -262,7 +403,7 @@ export function DashboardOverview() {
                       </span>
                     </td>
                     <td>
-                      <button type="button" className="table-action">
+                      <button type="button" className="table-action" onClick={() => setSelectedRecord(record)}>
                         <CalendarDays size={12} style={{ display: "inline", marginRight: 4 }} />
                         Review
                       </button>
@@ -275,5 +416,6 @@ export function DashboardOverview() {
         </div>
       </div>
     </main>
+    </>
   );
 }

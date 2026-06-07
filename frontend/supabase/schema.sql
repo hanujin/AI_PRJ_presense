@@ -16,6 +16,8 @@ create table if not exists public.presentation_records (
   result text not null,
   stress_average numeric(4, 2) not null,
   diagnosis text not null,
+  next_action text not null default '',
+  scene_label text not null default '',
   created_at timestamptz not null default timezone('utc', now())
 );
 

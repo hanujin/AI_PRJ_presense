@@ -12,6 +12,8 @@ export type PresentationRecord = {
   result: string;
   stressAverage: string;
   diagnosis: string;
+  nextAction: string;
+  sceneLabel: string;
 };
 
 export type DiagnosisRecord = {
@@ -86,7 +88,7 @@ export async function loadDashboardData() {
   const [{ data: recordRows, error: recordError }, { data: diagnosisRows, error: diagnosisError }] = await Promise.all([
     supabase
       .from("presentation_records")
-      .select("id, title, session_date, duration_seconds, result, stress_average, diagnosis")
+      .select("id, title, session_date, duration_seconds, result, stress_average, diagnosis, next_action, scene_label")
       .order("session_date", { ascending: false }),
     supabase
       .from("diagnosis_history")
@@ -111,6 +113,8 @@ export async function loadDashboardData() {
       result: row.result,
       stressAverage: Number(row.stress_average).toFixed(2),
       diagnosis: row.diagnosis,
+      nextAction: row.next_action ?? "",
+      sceneLabel: row.scene_label ?? "",
     })) as PresentationRecord[],
     diagnosisHistory: (diagnosisRows ?? []).map((row) => ({
       id: row.id,
@@ -217,6 +221,8 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
     result: input.result,
     stress_average: input.averageStress,
     diagnosis: input.diagnosis,
+    next_action: input.nextAction,
+    scene_label: input.sceneLabel,
   });
 
   if (recordError) {
