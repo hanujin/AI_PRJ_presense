@@ -4,19 +4,14 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Activity, BrainCircuit, CalendarDays, Clock, FolderClock, MoreHorizontal, Play, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useSupabaseAuth } from "@/components/supabase-provider";
+import { useLang } from "@/lib/i18n";
 import { loadDashboardData, type DiagnosisRecord, type PresentationRecord } from "@/lib/supabase/data";
 
-const SCENE_COLORS: Record<string, number> = {
-  camera: 78,
-  audience: 62,
-  interview: 55,
-  slides: 45,
-};
-
 function StressTrend({ records }: { records: PresentationRecord[] }) {
+  const { t } = useLang();
   if (records.length === 0) {
     return (
-      <div className="state-empty">No sessions yet — finish a practice run to see your trend.</div>
+      <div className="state-empty">{t("state.noSessionsTrend")}</div>
     );
   }
 
@@ -43,8 +38,8 @@ function StressTrend({ records }: { records: PresentationRecord[] }) {
         ))}
       </div>
       <div className="bar-chart-labels">
-        <span>Oldest</span>
-        <span>Latest</span>
+        <span>{t("chart.oldest")}</span>
+        <span>{t("chart.latest")}</span>
       </div>
     </div>
   );
@@ -59,10 +54,11 @@ function StressBar({ percent, color }: { percent: number; color: string }) {
 }
 
 function ReviewModal({ record, onClose, severityClass }: { record: PresentationRecord; onClose: () => void; severityClass: (r: string) => string }) {
+  const { t } = useLang();
   const stressValue = parseFloat(record.stressAverage);
   const stressPercent = Math.round(stressValue * 100);
   const stressColor = stressPercent > 65 ? "#ef4444" : stressPercent > 45 ? "#f59e0b" : "#22c55e";
-  const stressLabel = stressPercent > 65 ? "High" : stressPercent > 45 ? "Moderate" : "Low";
+  const stressTier = stressPercent > 65 ? "high" : stressPercent > 45 ? "moderate" : "low";
 
   const simulatedBars = (() => {
     const base = stressValue;
@@ -100,7 +96,7 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
 
         {/* Header */}
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Session Review</div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>{t("modal.sessionReview")}</div>
           <div style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>{record.title}</div>
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4 }}>
@@ -121,13 +117,13 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
         {/* Stress metrics */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
           <div className="report-card">
-            <div className="rc-label">Average Stress Score</div>
+            <div className="rc-label">{t("modal.avgStressScore")}</div>
             <div className="rc-value" style={{ color: stressColor }}>{record.stressAverage}</div>
-            <div className="rc-desc" style={{ marginBottom: 8 }}>Out of 1.00 — {stressLabel} pressure</div>
+            <div className="rc-desc" style={{ marginBottom: 8 }}>{t(`modal.outOf${stressTier === "high" ? "High" : stressTier === "moderate" ? "Moderate" : "Low"}`)}</div>
             <StressBar percent={stressPercent} color={stressColor} />
           </div>
           <div className="report-card">
-            <div className="rc-label">Stress Phase Breakdown</div>
+            <div className="rc-label">{t("modal.stressPhaseBreakdown")}</div>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height: 52, marginTop: 8, marginBottom: 8 }}>
               {simulatedBars.map((v, i) => (
                 <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
@@ -144,20 +140,20 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
         {/* AI Diagnosis */}
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16, marginBottom: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-            <Sparkles size={13} color="var(--accent)" /> AI Diagnosis
+            <Sparkles size={13} color="var(--accent)" /> {t("modal.aiDiagnosis")}
           </div>
           <div className="coach-stack" style={{ gap: 8 }}>
             <div className="coach-card coach-alert">
-              <h3>Overall Judgment</h3>
+              <h3>{t("modal.overallJudgment")}</h3>
               <p>{record.result}</p>
             </div>
             <div className="coach-card coach-data">
-              <h3>Peak Pressure Analysis</h3>
-              <p>{record.diagnosis || "No diagnosis recorded."}</p>
+              <h3>{t("modal.peakPressureAnalysis")}</h3>
+              <p>{record.diagnosis || t("modal.noDiagnosis")}</p>
             </div>
             {record.nextAction && (
               <div className="coach-card coach-ok">
-                <h3>Recommended Next Step</h3>
+                <h3>{t("modal.recommendedNextStep")}</h3>
                 <p>{record.nextAction}</p>
               </div>
             )}
@@ -167,14 +163,10 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
         {/* Coaching tips based on stress level */}
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-            <BrainCircuit size={13} color="var(--accent)" /> Coaching Insight
+            <BrainCircuit size={13} color="var(--accent)" /> {t("modal.coachingInsight")}
           </div>
           <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.7, background: "var(--surface-2, var(--border))", borderRadius: 8, padding: "12px 14px" }}>
-            {stressPercent > 65
-              ? "High stress detected — focus on slowing down between major points. Insert deliberate pauses (1–2 seconds) after each key term to allow the audience to absorb information and give yourself time to reset."
-              : stressPercent > 45
-              ? "Moderate stress detected — your baseline is acceptable but there were noticeable pressure spikes. Work on keeping a consistent pace in the mid-session core content where tension tends to build."
-              : "Low stress detected — delivery was stable. To improve further, focus on expressive variation: deliberate emphasis on key terms will make your presentation more engaging without raising anxiety."}
+            {t(`modal.coach.${stressTier}`)}
           </div>
         </div>
       </div>
@@ -184,6 +176,7 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
 
 export function DashboardOverview() {
   const { hasEnv, user } = useSupabaseAuth();
+  const { t } = useLang();
   const [presentationRecords, setPresentationRecords] = useState<PresentationRecord[]>([]);
   const [diagnosisHistory, setDiagnosisHistory] = useState<DiagnosisRecord[]>([]);
   const [isLoading, setIsLoading] = useState(hasEnv);
@@ -221,10 +214,26 @@ export function DashboardOverview() {
   const prevAvg = parseFloat(presentationRecords[1]?.stressAverage ?? "0");
   const stressDelta = totalSessions >= 2 ? latestAvg - prevAvg : null;
   const latestDiagnosis = diagnosisHistory[0]?.detail ?? "No sessions yet";
-  const latestFocus = diagnosisHistory.find((d) => d.label.toLowerCase().includes("focus"))?.value ?? "—";
 
-  const sceneTotals = Object.entries(SCENE_COLORS);
-  const maxScene = Math.max(...sceneTotals.map(([, v]) => v));
+  // Current Focus Area (Progress Report §1.3.2): the practice context that needs
+  // the most attention — derived from the highest-stress recent session's scene.
+  const focusRecord = presentationRecords
+    .filter((r) => r.sceneLabel)
+    .slice()
+    .sort((a, b) => parseFloat(b.stressAverage) - parseFloat(a.stressAverage))[0];
+  const currentFocus =
+    focusRecord?.sceneLabel ??
+    diagnosisHistory.find((d) => d.label.toLowerCase().includes("focus"))?.value ??
+    "—";
+
+  // Sessions by Scene: aggregated from real saved sessions, not a fixed table.
+  const sceneCounts = presentationRecords.reduce<Record<string, number>>((acc, r) => {
+    const key = r.sceneLabel?.trim() || "Unlabeled";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const sceneTotals = Object.entries(sceneCounts).sort((a, b) => b[1] - a[1]);
+  const maxScene = Math.max(...sceneTotals.map(([, v]) => v), 1);
 
   function severityClass(result: string) {
     const r = result.toLowerCase();
@@ -245,13 +254,13 @@ export function DashboardOverview() {
     <main className="page-content">
       <div className="page-top">
         <div>
-          <h1 className="page-title">System Overview</h1>
-          <p className="page-subtitle">Real-time intelligence from your presentation practice.</p>
+          <h1 className="page-title">{t("dash.title")}</h1>
+          <p className="page-subtitle">{t("dash.subtitle")}</p>
         </div>
         <div className="page-actions">
           <Link href="/practice" className="btn btn-primary">
             <Play size={14} />
-            Start Practice
+            {t("cta.startPractice")}
           </Link>
         </div>
       </div>
@@ -262,12 +271,12 @@ export function DashboardOverview() {
           <div className="kpi-top">
             <div className="kpi-icon"><FolderClock size={16} /></div>
             <span className={`kpi-badge neutral`}>
-              {hasEnv ? "Synced" : "Local"}
+              {hasEnv ? t("badge.synced") : t("badge.local")}
             </span>
           </div>
           <div className="kpi-value">{totalSessions}</div>
-          <div className="kpi-label">Total Sessions</div>
-          <div className="kpi-sub">{hasEnv ? "Saved to your account" : "Add Supabase to sync"}</div>
+          <div className="kpi-label">{t("kpi.totalSessions")}</div>
+          <div className="kpi-sub">{hasEnv ? t("kpi.totalSessions.synced") : t("kpi.totalSessions.local")}</div>
         </div>
 
         <div className="kpi-card">
@@ -283,8 +292,8 @@ export function DashboardOverview() {
             )}
           </div>
           <div className="kpi-value">{latestAvg.toFixed(2)}</div>
-          <div className="kpi-label">Latest Avg Stress</div>
-          <div className="kpi-sub">Score out of 1.00</div>
+          <div className="kpi-label">{t("kpi.latestAvgStress")}</div>
+          <div className="kpi-sub">{t("kpi.scoreOutOf")}</div>
         </div>
 
         <div className="kpi-card">
@@ -292,11 +301,11 @@ export function DashboardOverview() {
             <div className="kpi-icon" style={{ background: "rgba(245,158,11,0.1)", color: "var(--accent-warn)" }}>
               <Activity size={16} />
             </div>
-            <span className="kpi-badge neutral">Latest</span>
+            <span className="kpi-badge neutral">{t("badge.latest")}</span>
           </div>
-          <div className="kpi-value" style={{ fontSize: 18, marginBottom: 6, lineHeight: 1.3 }}>{latestFocus}</div>
-          <div className="kpi-label">Next Focus Area</div>
-          <div className="kpi-sub">From latest diagnosis</div>
+          <div className="kpi-value" style={{ fontSize: 18, marginBottom: 6, lineHeight: 1.3 }}>{currentFocus}</div>
+          <div className="kpi-label">{t("kpi.currentFocus")}</div>
+          <div className="kpi-sub">{t("kpi.currentFocusSub")}</div>
         </div>
 
         <div className="kpi-card">
@@ -306,8 +315,8 @@ export function DashboardOverview() {
             </div>
           </div>
           <div className="kpi-value" style={{ fontSize: 18, marginBottom: 6, lineHeight: 1.3, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>{latestDiagnosis.slice(0, 40)}{latestDiagnosis.length > 40 ? "…" : ""}</div>
-          <div className="kpi-label">Latest Diagnosis</div>
-          <div className="kpi-sub">AI coaching summary</div>
+          <div className="kpi-label">{t("kpi.latestDiagnosis")}</div>
+          <div className="kpi-sub">{t("kpi.latestDiagnosisSub")}</div>
         </div>
       </div>
 
@@ -316,19 +325,19 @@ export function DashboardOverview() {
         <div className="card">
           <div className="panel-head">
             <div className="panel-head-left">
-              <span className="panel-title">Stress Trend Over Time</span>
-              <span className="panel-subtitle">Average stress score per session</span>
+              <span className="panel-title">{t("panel.stressTrend")}</span>
+              <span className="panel-subtitle">{t("panel.stressTrendSub")}</span>
             </div>
             <div className="chart-legend">
               <div className="legend-item">
                 <div className="legend-dot" style={{ background: "var(--accent)" }} />
-                Stress score
+                {t("legend.stressScore")}
               </div>
             </div>
           </div>
 
           {isLoading ? (
-            <p className="state-loading">Loading sessions...</p>
+            <p className="state-loading">{t("state.loadingSessions")}</p>
           ) : loadError ? (
             <p className="error-msg">{loadError}</p>
           ) : (
@@ -339,22 +348,28 @@ export function DashboardOverview() {
         <div className="card">
           <div className="panel-head">
             <div className="panel-head-left">
-              <span className="panel-title">Sessions by Scene</span>
-              <span className="panel-subtitle">Practice mode breakdown</span>
+              <span className="panel-title">{t("panel.sessionsByScene")}</span>
+              <span className="panel-subtitle">{t("panel.sessionsBySceneSub")}</span>
             </div>
           </div>
 
-          {sceneTotals.map(([scene, value]) => (
-            <div key={scene} className="asset-row">
-              <div className="asset-info">
-                <div className="asset-name" style={{ textTransform: "capitalize" }}>{scene}</div>
-                <div className="asset-bar-track">
-                  <div className="asset-bar-fill" style={{ width: `${Math.round((value / maxScene) * 100)}%` }} />
+          {isLoading ? (
+            <p className="state-loading">{t("state.loadingSessions")}</p>
+          ) : sceneTotals.length === 0 ? (
+            <div className="state-empty">{t("state.noSessionsScene")}</div>
+          ) : (
+            sceneTotals.map(([scene, value]) => (
+              <div key={scene} className="asset-row">
+                <div className="asset-info">
+                  <div className="asset-name" style={{ textTransform: "capitalize" }}>{scene}</div>
+                  <div className="asset-bar-track">
+                    <div className="asset-bar-fill" style={{ width: `${Math.round((value / maxScene) * 100)}%` }} />
+                  </div>
                 </div>
+                <div className="asset-value">{value} {value === 1 ? t("unit.session") : t("unit.sessions")}</div>
               </div>
-              <div className="asset-value">{value} min</div>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </div>
 
@@ -363,8 +378,8 @@ export function DashboardOverview() {
         <div style={{ padding: "18px 20px 14px", borderBottom: "1px solid var(--border)" }}>
           <div className="panel-head" style={{ marginBottom: 0 }}>
             <div className="panel-head-left">
-              <span className="panel-title">Recent Sessions</span>
-              <span className="panel-subtitle">Session history &amp; results</span>
+              <span className="panel-title">{t("panel.recentSessions")}</span>
+              <span className="panel-subtitle">{t("panel.recentSessionsSub")}</span>
             </div>
             <div className="panel-actions">
               <button type="button" className="icon-btn"><SlidersHorizontal size={14} /></button>
@@ -377,19 +392,19 @@ export function DashboardOverview() {
           <table className="data-table">
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Title</th>
-                <th>Duration</th>
-                <th>Avg Stress</th>
-                <th>Result</th>
-                <th>Action</th>
+                <th>{t("table.date")}</th>
+                <th>{t("table.title")}</th>
+                <th>{t("table.duration")}</th>
+                <th>{t("table.avgStress")}</th>
+                <th>{t("table.result")}</th>
+                <th>{t("table.action")}</th>
               </tr>
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={6} style={{ padding: "20px 16px", color: "var(--text-secondary)" }}>Loading...</td></tr>
+                <tr><td colSpan={6} style={{ padding: "20px 16px", color: "var(--text-secondary)" }}>{t("table.loading")}</td></tr>
               ) : presentationRecords.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: "20px 16px", color: "var(--text-secondary)" }}>No sessions yet. Finish a practice run to see it here.</td></tr>
+                <tr><td colSpan={6} style={{ padding: "20px 16px", color: "var(--text-secondary)" }}>{t("table.noSessions")}</td></tr>
               ) : (
                 presentationRecords.map((record) => (
                   <tr key={record.id}>
@@ -405,7 +420,7 @@ export function DashboardOverview() {
                     <td>
                       <button type="button" className="table-action" onClick={() => setSelectedRecord(record)}>
                         <CalendarDays size={12} style={{ display: "inline", marginRight: 4 }} />
-                        Review
+                        {t("table.review")}
                       </button>
                     </td>
                   </tr>

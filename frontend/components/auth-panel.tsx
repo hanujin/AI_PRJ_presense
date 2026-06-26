@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BrainCircuit, LockKeyhole, Mail, Sparkles, UserRound, Video } from "lucide-react";
+import { BrainCircuit, Languages, LockKeyhole, Mail, Sparkles, UserRound, Video } from "lucide-react";
 import { useSupabaseAuth } from "@/components/supabase-provider";
+import { useLang } from "@/lib/i18n";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export function AuthPanel() {
@@ -16,6 +17,7 @@ export function AuthPanel() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const router = useRouter();
   const { hasEnv, signInWithPassword, signUpWithPassword, user } = useSupabaseAuth();
+  const { lang, toggle, t } = useLang();
 
   useEffect(() => {
     if (user) router.push("/dashboard");
@@ -32,9 +34,9 @@ export function AuthPanel() {
         redirectTo: `${window.location.origin}/auth/callback`,
       });
       if (error) throw error;
-      setSubmitMessage("Recovery email sent. Check your inbox and click the link.");
+      setSubmitMessage(t("auth.recoverySent"));
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Failed to send recovery email.");
+      setSubmitError(error instanceof Error ? error.message : t("auth.recoveryFailed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -49,7 +51,7 @@ export function AuthPanel() {
       if (mode === "signup") {
         const result = await signUpWithPassword(email, password, name);
         if (result.needsEmailConfirmation) {
-          setSubmitMessage("Account created. Check your email to confirm before logging in.");
+          setSubmitMessage(t("auth.created"));
           return;
         }
       } else {
@@ -58,7 +60,7 @@ export function AuthPanel() {
 
       router.push("/dashboard");
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Authentication failed.");
+      setSubmitError(error instanceof Error ? error.message : t("auth.failed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -66,6 +68,17 @@ export function AuthPanel() {
 
   return (
     <div className="auth-layout">
+      <button
+        type="button"
+        className="lang-toggle auth-lang-toggle"
+        onClick={toggle}
+        aria-label={t("lang.toggle")}
+        title={t("lang.toggle")}
+      >
+        <Languages size={14} />
+        <span>{lang === "ko" ? "한" : "EN"}</span>
+      </button>
+
       <div className="auth-left">
         <div className="auth-brand-row">
           <div className="auth-brand-icon">
@@ -73,56 +86,53 @@ export function AuthPanel() {
           </div>
           <div>
             <div className="auth-brand-name">PreSense</div>
-            <div className="auth-brand-sub">Presentation AI</div>
+            <div className="auth-brand-sub">{t("brand.tagline")}</div>
           </div>
         </div>
 
-        <h1 className="auth-headline">Practice smarter, present better.</h1>
-        <p className="auth-desc">
-          Real-time stress detection from your webcam and microphone — powered by Knowledge
-          Distillation from biosignals. No wearables required.
-        </p>
+        <h1 className="auth-headline">{t("auth.headline")}</h1>
+        <p className="auth-desc">{t("auth.desc")}</p>
 
         <div className="auth-features">
           <div className="auth-feature">
             <div className="auth-feature-icon"><Video size={15} color="white" /></div>
-            Live camera + microphone analysis
+            {t("auth.feature1")}
           </div>
           <div className="auth-feature">
             <div className="auth-feature-icon"><BrainCircuit size={15} color="white" /></div>
-            AI stress detection after each session
+            {t("auth.feature2")}
           </div>
           <div className="auth-feature">
             <div className="auth-feature-icon"><UserRound size={15} color="white" /></div>
-            Session history and progress tracking
+            {t("auth.feature3")}
           </div>
         </div>
       </div>
 
       <div className="auth-right">
         <div className="auth-form-card">
-          <div className="auth-form-title">{mode === "login" ? "Welcome back" : "Create account"}</div>
+          <div className="auth-form-title">{mode === "login" ? t("auth.welcomeBack") : t("auth.createAccount")}</div>
           <div className="auth-form-sub">
-            {mode === "login" ? "Sign in to your PreSense account." : "Start your presentation practice journey."}
+            {mode === "login" ? t("auth.signInSub") : t("auth.signUpSub")}
           </div>
 
           <div className="auth-tabs-row">
             <button type="button" className={`auth-tab${mode === "login" ? " active" : ""}`} onClick={() => { setMode("login"); setSubmitError(""); setSubmitMessage(""); }}>
-              Login
+              {t("auth.login")}
             </button>
             <button type="button" className={`auth-tab${mode === "signup" ? " active" : ""}`} onClick={() => { setMode("signup"); setSubmitError(""); setSubmitMessage(""); }}>
-              Sign Up
+              {t("auth.signUp")}
             </button>
           </div>
 
           {mode === "forgot" ? (
             <>
               <p style={{ fontSize: 13, color: "var(--text-secondary)", margin: "14px 0 16px" }}>
-                Enter your account email and we will send a password recovery link.
+                {t("auth.forgotIntro")}
               </p>
               <div className="field-group">
                 <div className="field-wrap">
-                  <label className="field-label">Email</label>
+                  <label className="field-label">{t("auth.email")}</label>
                   <div className="field-input">
                     <Mail size={15} className="field-icon" />
                     <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" type="email" />
@@ -138,14 +148,14 @@ export function AuthPanel() {
                 disabled={!hasEnv || isSubmitting || !email}
                 onClick={handleForgotPassword}
               >
-                {isSubmitting ? "Sending…" : "Send Recovery Email"}
+                {isSubmitting ? t("auth.sending") : t("auth.sendRecovery")}
               </button>
               <button
                 type="button"
                 style={{ width: "100%", marginTop: 10, background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}
                 onClick={() => { setMode("login"); setSubmitError(""); setSubmitMessage(""); }}
               >
-                ← Back to login
+                {t("auth.backToLogin")}
               </button>
             </>
           ) : (
@@ -153,16 +163,16 @@ export function AuthPanel() {
               <div className="field-group">
                 {mode === "signup" && (
                   <div className="field-wrap">
-                    <label className="field-label">Name</label>
+                    <label className="field-label">{t("auth.name")}</label>
                     <div className="field-input">
                       <UserRound size={15} className="field-icon" />
-                      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your full name" />
+                      <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("auth.namePlaceholder")} />
                     </div>
                   </div>
                 )}
 
                 <div className="field-wrap">
-                  <label className="field-label">Email</label>
+                  <label className="field-label">{t("auth.email")}</label>
                   <div className="field-input">
                     <Mail size={15} className="field-icon" />
                     <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" type="email" />
@@ -170,10 +180,10 @@ export function AuthPanel() {
                 </div>
 
                 <div className="field-wrap">
-                  <label className="field-label">Password</label>
+                  <label className="field-label">{t("auth.password")}</label>
                   <div className="field-input">
                     <LockKeyhole size={15} className="field-icon" />
-                    <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Enter password" />
+                    <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder={t("auth.passwordPlaceholder")} />
                   </div>
                 </div>
               </div>
@@ -184,12 +194,12 @@ export function AuthPanel() {
                   style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "var(--text-secondary)", padding: "4px 0", marginTop: 2, textAlign: "right", width: "100%" }}
                   onClick={() => { setMode("forgot"); setSubmitError(""); setSubmitMessage(""); }}
                 >
-                  Forgot password?
+                  {t("auth.forgotPassword")}
                 </button>
               )}
 
               {!hasEnv && (
-                <p className="info-msg">Supabase not configured — auth is disabled.</p>
+                <p className="info-msg">{t("auth.notConfigured")}</p>
               )}
               {submitError && <p className="error-msg">{submitError}</p>}
               {submitMessage && <p className="success-msg">{submitMessage}</p>}
@@ -201,7 +211,7 @@ export function AuthPanel() {
                 disabled={!hasEnv || isSubmitting || !email || !password || (mode === "signup" && !name)}
                 onClick={handleSubmit}
               >
-                {isSubmitting ? "Please wait..." : mode === "login" ? "Enter Dashboard" : "Create Account"}
+                {isSubmitting ? t("auth.pleaseWait") : mode === "login" ? t("auth.enterDashboard") : t("auth.createAccountBtn")}
               </button>
             </>
           )}

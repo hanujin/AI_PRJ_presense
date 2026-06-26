@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, Camera, Lock, Mic, SlidersHorizontal } from "lucide-react";
+import { Bell, Camera, Languages, Lock, Mic, SlidersHorizontal } from "lucide-react";
 import {
   buildDefaultPrimarySettings,
   buildDefaultSectionSettings,
@@ -9,6 +9,7 @@ import {
   settingsSections,
 } from "@/lib/app-data";
 import { useSupabaseAuth } from "@/components/supabase-provider";
+import { useLang } from "@/lib/i18n";
 import { loadUserSettings, saveUserSettings } from "@/lib/supabase/data";
 
 const PRIMARY_SETTINGS_KEY = "presense-primary-settings";
@@ -18,6 +19,7 @@ const PRIMARY_ICONS = [Camera, Mic, Bell];
 
 export function SettingsPanel() {
   const { hasEnv, user } = useSupabaseAuth();
+  const { lang, setLang, t } = useLang();
   const [primaryToggles, setPrimaryToggles] = useState<Record<string, boolean>>(() => buildDefaultPrimarySettings());
   const [sectionToggles, setSectionToggles] = useState<Record<string, boolean>>(() => buildDefaultSectionSettings());
   const [statusMessage, setStatusMessage] = useState("");
@@ -36,7 +38,7 @@ export function SettingsPanel() {
       })
       .catch((error) => {
         if (!isMounted) return;
-        setLoadError(error instanceof Error ? error.message : "Failed to load settings.");
+        setLoadError(error instanceof Error ? error.message : t("settings.failedLoad"));
       });
 
     return () => { isMounted = false; };
@@ -61,13 +63,13 @@ export function SettingsPanel() {
   }, [hasEnv, sectionToggles, user]);
 
   async function persistSettings(nextP: Record<string, boolean>, nextS: Record<string, boolean>) {
-    if (!hasEnv || !user) { setStatusMessage("Saved in this browser only."); return; }
+    if (!hasEnv || !user) { setStatusMessage(t("settings.savedBrowserOnly")); return; }
     try {
       await saveUserSettings({ primary: nextP, sections: nextS });
-      setStatusMessage("Saved to your account.");
+      setStatusMessage(t("settings.savedAccount"));
       setLoadError("");
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : "Failed to save settings.");
+      setLoadError(error instanceof Error ? error.message : t("settings.failedSave"));
     }
   }
 
@@ -89,13 +91,42 @@ export function SettingsPanel() {
     <main className="page-content">
       <div className="page-top">
         <div>
-          <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Manage your practice preferences, privacy, and AI coaching options.</p>
+          <h1 className="page-title">{t("settings.title")}</h1>
+          <p className="page-subtitle">{t("settings.subtitle")}</p>
         </div>
       </div>
 
       {loadError && <p className="error-msg" style={{ marginBottom: 16 }}>{loadError}</p>}
       {statusMessage && <p className="success-msg" style={{ marginBottom: 16 }}>{statusMessage}</p>}
+
+      {/* Language */}
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="settings-row">
+          <div>
+            <div className="settings-row-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Languages size={15} color="var(--text-secondary)" />
+              {t("settings.language")}
+            </div>
+            <div className="kpi-sub" style={{ marginTop: 2 }}>{t("settings.languageDesc")}</div>
+          </div>
+          <div className="lang-segment">
+            <button
+              type="button"
+              className={lang === "ko" ? "active" : ""}
+              onClick={() => setLang("ko")}
+            >
+              한국어
+            </button>
+            <button
+              type="button"
+              className={lang === "en" ? "active" : ""}
+              onClick={() => setLang("en")}
+            >
+              English
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Primary toggles */}
       <div className="kpi-row" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
@@ -114,11 +145,11 @@ export function SettingsPanel() {
                   aria-pressed={isOn}
                   onClick={() => togglePrimary(setting.id)}
                 >
-                  {isOn ? "Enabled" : "Disabled"}
+                  {isOn ? t("toggle.enabled") : t("toggle.disabled")}
                 </button>
               </div>
-              <div className="kpi-value" style={{ fontSize: 15, fontFamily: "inherit", marginBottom: 4 }}>{setting.label}</div>
-              <div className="kpi-sub">Click to toggle</div>
+              <div className="kpi-value" style={{ fontSize: 15, fontFamily: "inherit", marginBottom: 4 }}>{t(`set.${setting.id}`, setting.label)}</div>
+              <div className="kpi-sub">{t("settings.clickToToggle")}</div>
             </div>
           );
         })}
@@ -132,7 +163,7 @@ export function SettingsPanel() {
             <div key={section.title} className="card">
               <div className="panel-head">
                 <div className="panel-head-left">
-                  <span className="panel-title">{section.title}</span>
+                  <span className="panel-title">{t(`set.section.${section.title}`, section.title)}</span>
                 </div>
                 <Icon size={16} color="var(--text-secondary)" />
               </div>
@@ -142,7 +173,7 @@ export function SettingsPanel() {
                 return (
                   <div key={item.id} className="settings-row">
                     <div>
-                      <div className="settings-row-label">{item.label}</div>
+                      <div className="settings-row-label">{t(`set.${item.id}`, item.label)}</div>
                     </div>
                     <button
                       type="button"
@@ -150,7 +181,7 @@ export function SettingsPanel() {
                       aria-pressed={isOn}
                       onClick={() => toggleSection(item.id)}
                     >
-                      {isOn ? "On" : "Off"}
+                      {isOn ? t("toggle.on") : t("toggle.off")}
                     </button>
                   </div>
                 );

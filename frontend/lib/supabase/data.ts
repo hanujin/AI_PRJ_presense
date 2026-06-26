@@ -29,6 +29,7 @@ export type PersistedSettings = {
 };
 
 type SavePracticeSessionInput = {
+  title?: string;
   durationSeconds: number;
   averageStress: number;
   result: string;
@@ -211,7 +212,7 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
   }
 
   const sessionDate = new Date().toISOString();
-  const title = `${input.sceneLabel} Practice`;
+  const title = input.title?.trim() || `${input.sceneLabel} Practice`;
 
   const { error: recordError } = await supabase.from("presentation_records").insert({
     user_id: user.id,

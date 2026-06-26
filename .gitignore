@@ -17,12 +17,21 @@ ehthumbs.db
 Thumbs.db
 design.md
 proposal.docx
+명령어.md
 
 # Frontend build artifacts
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/tsconfig.tsbuildinfo
+
+# Progress Report PDF — contains personal info (names, emails, phone numbers),
+# and is no longer used by the app. Do not publish.
+frontend/public/samples/
 
 .env
 .env.example
 .env.local
+
+.obsidian/
+.document/

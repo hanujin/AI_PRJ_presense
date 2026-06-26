@@ -3,19 +3,21 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, HelpCircle, LogOut, Search, Settings, Sparkles, UserRound, Video } from "lucide-react";
+import { BarChart3, Bell, HelpCircle, Languages, LogOut, Search, Settings, Sparkles, UserRound, Video } from "lucide-react";
 import { useSupabaseAuth } from "@/components/supabase-provider";
+import { useLang } from "@/lib/i18n";
 
 const navLinks = [
-  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
-  { href: "/practice", label: "Practice", icon: Video },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/dashboard", key: "nav.dashboard", icon: BarChart3 },
+  { href: "/practice", key: "nav.practice", icon: Video },
+  { href: "/settings", key: "nav.settings", icon: Settings },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { hasEnv, isLoading, signOut, user } = useSupabaseAuth();
+  const { lang, toggle, t } = useLang();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -50,13 +52,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="sidebar-brand-icon"><Sparkles size={16} /></div>
             <div>
               <strong>PreSense</strong>
-              <span>Presentation AI</span>
+              <span>{t("brand.tagline")}</span>
             </div>
           </Link>
         </aside>
         <div className="main-area">
           <div className="page-content">
-            <p className="state-loading">Loading your workspace...</p>
+            <p className="state-loading">{t("common.loadingWorkspace")}</p>
           </div>
         </div>
       </div>
@@ -70,15 +72,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="sidebar-brand-icon"><Sparkles size={16} /></div>
           <div>
             <strong>PreSense</strong>
-            <span>Presentation AI</span>
+            <span>{t("brand.tagline")}</span>
           </div>
         </Link>
 
         <nav className="sidebar-nav">
-          {navLinks.map(({ href, label, icon: Icon }) => (
+          {navLinks.map(({ href, key, icon: Icon }) => (
             <Link key={href} href={href} className={`sidebar-link${pathname === href ? " active" : ""}`}>
               <Icon size={16} />
-              {label}
+              {t(key)}
             </Link>
           ))}
         </nav>
@@ -86,7 +88,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="sidebar-footer">
           <Link href="/practice" className="sidebar-cta">
             <Video size={15} />
-            Start Practice
+            {t("cta.startPractice")}
           </Link>
         </div>
       </aside>
@@ -95,10 +97,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="main-header">
           <div className="search-bar">
             <Search size={14} />
-            <input placeholder="Search sessions..." />
+            <input placeholder={t("header.search")} />
           </div>
 
           <div className="header-actions">
+            <button
+              type="button"
+              className="lang-toggle"
+              onClick={toggle}
+              aria-label={t("lang.toggle")}
+              title={t("lang.toggle")}
+            >
+              <Languages size={14} />
+              <span>{lang === "ko" ? "한" : "EN"}</span>
+            </button>
             <button type="button" className="icon-btn" aria-label="Notifications">
               <Bell size={15} />
             </button>
@@ -122,18 +134,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <div className="avatar-menu-divider" />
                   <Link href="/settings" className="avatar-menu-item" onClick={() => setMenuOpen(false)}>
                     <Settings size={14} />
-                    Settings
+                    {t("menu.settings")}
                   </Link>
                   <div className="avatar-menu-divider" />
                   {user ? (
                     <button type="button" className="avatar-menu-item danger" onClick={handleSignOut}>
                       <LogOut size={14} />
-                      Sign out
+                      {t("menu.signOut")}
                     </button>
                   ) : (
                     <Link href="/" className="avatar-menu-item" onClick={() => setMenuOpen(false)}>
                       <UserRound size={14} />
-                      Log in
+                      {t("menu.login")}
                     </Link>
                   )}
                 </div>
