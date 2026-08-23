@@ -1,6 +1,7 @@
 # Exclude results folder as requested
 results/
 checkpoints/
+archive/
 *.npy
 *.pt
 

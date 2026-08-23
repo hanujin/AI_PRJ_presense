@@ -1,266 +1,288 @@
 """
-Architecture ① — End-to-End Raw Input (ResNet18 + Wav2Vec 2.0)
+PreSense — Backbone 모델 정의 (pre-extracted features 기반)
+  Teacher, StudentCMABi, CBMWithResidual
 
-⚠️  이 모듈은 raw 영상 프레임 / raw 음성 파형 / raw 생리신호 시계열을 직접 처리합니다.
-    현재 파이프라인(pre-extracted features)과 독립적으로 동작합니다.
+입력 파이프라인:
+  frame_feats : (B, T, 512)  ResNet18 per-frame  (cbm_resnet_feats.npy)
+  audio_emb   : (B, 256)     Wav2Vec2 → Linear   (cbm_w2v_feats.npy)
+  geometry    : (B, T, 24)   MediaPipe 파생 지표  (dual_geo_scaled.npy)
+  ege_feats   : (B, 88)      eGeMAPS v02           (ege_maps_feats.npy, optional)
+  physio      : (B, 132)     ECG/EDA/Resp CSV     (Teacher 학습 전용)
+  task_id     : (B,)         발표 태스크 인덱스
 
-실행 전 필요 작업
-─────────────────
-1. 추가 패키지 설치:
-       pip install torchvision torchaudio transformers
-
-2. dataset_e2e.py 의 StressIDRawDataset 으로 raw 데이터 로드
-
-3. 학습 루프는 기존 train.py 와 별개로 구성해야 합니다
-   (Teacher/Student forward 인자가 다름: frames, audio_wave, physio_ts)
-
-임베딩 차원 (다이어그램 기준)
-──────────────────────────
-  f_v  : 512   ResNet18 avgpool 출력
-  f_a  : 256   Wav2Vec2 768 → Linear(256)
-  f_p  : 128   1D-CNN (Teacher 전용)
-
-KD 방식
-───────
-  Soft Label KD : Teacher logits → Student loss
-  Feature KD    : f_v' ≈ f_v (MSE),  f_a' ≈ f_a (MSE)
+활성 모델:
+  Teacher        — KD Teacher (학습 전용, physio 사용)
+  StudentCMABi — V2 Student (eGeMAPS + GeometryGRUAttn)  ← 배포 모델
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ─── 선택적 임포트 ────────────────────────────────────────────────────────────
-try:
-    import torchvision.models as tv_models
-    _HAS_TORCHVISION = True
-except ImportError:
-    _HAS_TORCHVISION = False
+# ── 차원 상수 ─────────────────────────────────────────────────────────────────
+VIDEO_EMB_DIM  = 512
+AUDIO_EMB_DIM  = 256
+EGEMAP_DIM     = 88
+AUDIO_V2_DIM   = AUDIO_EMB_DIM + EGEMAP_DIM   # 344
 
-try:
-    from transformers import Wav2Vec2Model
-    _HAS_TRANSFORMERS = True
-except ImportError:
-    _HAS_TRANSFORMERS = False
+NUM_TASKS    = 11
+TASK_EMB_DIM = 8
 
-# ─── 임베딩 차원 ──────────────────────────────────────────────────────────────
-VIDEO_EMB_DIM  = 512   # ResNet18 feature map
-AUDIO_EMB_DIM  = 256   # Wav2Vec2 → proj
-PHYSIO_EMB_DIM = 128   # 1D-CNN
+GEO_INPUT_DIM  = 24
+GEO_HIDDEN_DIM = 64
+FUSED_EXP_DIM  = AUDIO_EMB_DIM + GEO_HIDDEN_DIM   # 320
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  모달리티별 인코더
+#  공용 모듈
 # ══════════════════════════════════════════════════════════════════════════════
 
-class VideoEncoder(nn.Module):
+class ModalityGate(nn.Module):
     """
-    ResNet18 기반 영상 인코더.
-
-    입력: (B, T, 3, H, W)  — T개 프레임, H=W=224 권장
-    출력: (B, 512)          — 프레임별 특징을 시간 평균 풀링
+    학습 가능한 경량 모달리티 게이트.
+    concat(v, a[, p]) → softmax → 가중합 → fused
     """
-    def __init__(self, pretrained: bool = True, freeze: bool = True):
+    def __init__(self, v_dim: int, a_dim: int, p_dim: int = None, proj_dim: int = 256):
         super().__init__()
-        if not _HAS_TORCHVISION:
-            raise ImportError("pip install torchvision 필요")
-        weights = 'IMAGENET1K_V1' if pretrained else None
-        resnet  = tv_models.resnet18(weights=weights)
-        # fc 레이어 제거 → avgpool 직후 512차원 특징 사용
-        self.backbone = nn.Sequential(*list(resnet.children())[:-1])
-        if freeze:
-            for p in self.backbone.parameters():
-                p.requires_grad = False
+        self.proj_dim   = proj_dim
+        self.has_physio = p_dim is not None
+        n = 3 if self.has_physio else 2
+
+        self.v_proj = nn.Linear(v_dim, proj_dim)
+        self.a_proj = nn.Linear(a_dim, proj_dim)
+        if self.has_physio:
+            self.p_proj = nn.Linear(p_dim, proj_dim)
+        self.gate = nn.Linear(proj_dim * n, n)
+
+    def forward(self, v, a, p=None):
+        vp = self.v_proj(v)
+        ap = self.a_proj(a)
+        if self.has_physio and p is not None:
+            pp    = self.p_proj(p)
+            w     = torch.softmax(self.gate(torch.cat([vp, ap, pp], dim=1)), dim=1)
+            fused = w[:, 0:1] * vp + w[:, 1:2] * ap + w[:, 2:3] * pp
+        else:
+            w     = torch.softmax(self.gate(torch.cat([vp, ap], dim=1)), dim=1)
+            fused = w[:, 0:1] * vp + w[:, 1:2] * ap
+        return fused, w  # (B, proj_dim), (B, n)
+
+
+class CrossModalAttention(nn.Module):
+    """
+    Q: audio_emb (B, a_dim) — 무엇을 찾을지
+    K, V: lstm_out (B, T, v_dim) — 영상 프레임 시퀀스
+    → 음성이 관련 프레임에 주목 → audio-guided video representation
+    """
+    def __init__(self, v_dim: int = 256, a_dim: int = 256,
+                 d_k: int = 64, out_dim: int = 256, dropout: float = 0.1):
+        super().__init__()
+        self.q_proj   = nn.Linear(a_dim, d_k)
+        self.k_proj   = nn.Linear(v_dim, d_k)
+        self.v_proj   = nn.Linear(v_dim, out_dim)
+        self.out_proj = nn.Linear(out_dim + a_dim, out_dim)
+        self.norm     = nn.LayerNorm(out_dim)
+        self.drop     = nn.Dropout(dropout)
+        self.scale    = d_k ** -0.5
+
+    def forward(self, lstm_out: torch.Tensor, a_emb: torch.Tensor):
+        """
+        lstm_out : (B, T, v_dim)
+        a_emb    : (B, a_dim)
+        → fused (B, out_dim), attn_weights (B, T)
+        """
+        Q = self.q_proj(a_emb).unsqueeze(1)              # (B, 1, d_k)
+        K = self.k_proj(lstm_out)                         # (B, T, d_k)
+        V = self.v_proj(lstm_out)                         # (B, T, out_dim)
+        scores   = Q @ K.transpose(-1, -2) * self.scale  # (B, 1, T)
+        weights  = torch.softmax(scores, dim=-1)          # (B, 1, T)
+        attended = self.drop(weights @ V).squeeze(1)      # (B, out_dim)
+        fused    = self.out_proj(torch.cat([attended, a_emb], dim=1))
+        return self.norm(fused), weights.squeeze(1)       # (B, out_dim), (B, T)
+
+
+class GeometryGRUAttn(nn.Module):
+    """
+    geometry 시퀀스 (B, T, 24) → g_emb (B, 64).
+    GRU 전체 스텝 출력을 학습된 스칼라 어텐션으로 집계.
+    발표 중 스트레스 피크 구간을 시점과 무관하게 포착.
+    """
+    def __init__(self, input_dim: int = GEO_INPUT_DIM,
+                 hidden_dim: int = GEO_HIDDEN_DIM, dropout: float = 0.2):
+        super().__init__()
+        self.gru        = nn.GRU(input_dim, hidden_dim, batch_first=True)
+        self.attn_score = nn.Linear(hidden_dim, 1)
+        self.attn_drop  = nn.Dropout(dropout * 0.5)
+        self.drop       = nn.Dropout(dropout)
+        self.norm       = nn.LayerNorm(hidden_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, C, H, W = x.shape
-        x = x.view(B * T, C, H, W)                  # (B*T, C, H, W)
-        x = self.backbone(x).flatten(1)              # (B*T, 512)
-        x = x.view(B, T, VIDEO_EMB_DIM).mean(dim=1)  # (B, 512) — 프레임 평균
-        return x  # f_v
+        out, _ = self.gru(x)                                    # (B, T, 64)
+        w      = torch.softmax(self.attn_score(out), dim=1)    # (B, T, 1)
+        pooled = (self.attn_drop(w) * out).sum(dim=1)          # (B, 64)
+        return self.norm(self.drop(pooled))
 
 
-class AudioEncoder(nn.Module):
+# ══════════════════════════════════════════════════════════════════════════════
+#  모델
+# ══════════════════════════════════════════════════════════════════════════════
+
+class Teacher(nn.Module):
     """
-    Wav2Vec 2.0 base 기반 음성 인코더.
+    KD Teacher — video + audio + geometry + physio.
 
-    입력: (B, T_audio)  — 16 kHz raw waveform (padding 처리 필요)
-    출력: (B, 256)
+    입력 (모두 pre-extracted):
+      frame_feats : (B, T, 512)
+      audio_emb   : (B, 256)
+      physio      : (B, physio_in)  ECG/EDA/Resp CSV 피처
+      geometry    : (B, T, 24)
+      task_id     : (B,)
+
+    출력: logits (B, 2), fused_expanded (B, 320)
     """
-    def __init__(self, freeze: bool = True):
+    def __init__(self, physio_in: int = 132, lstm_hidden: int = 256,
+                 num_classes: int = 2, dropout: float = 0.3):
         super().__init__()
-        if not _HAS_TRANSFORMERS:
-            raise ImportError("pip install transformers 필요")
-        self.wav2vec = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base")
-        if freeze:
-            for p in self.wav2vec.parameters():
-                p.requires_grad = False
-        self.proj = nn.Linear(768, AUDIO_EMB_DIM)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.wav2vec(x).last_hidden_state.mean(dim=1)  # (B, 768)
-        return self.proj(h)  # (B, 256) — f_a
-
-
-class PhysioEncoder(nn.Module):
-    """
-    1D-CNN 생리신호 인코더 (Teacher 전용).
-
-    입력: (B, 3, T_physio)  — ECG / EDA / Respiration raw 시계열
-    출력: (B, 128)
-    """
-    def __init__(self, in_channels: int = 3, dropout: float = 0.3):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv1d(in_channels, 32,  kernel_size=7, padding=3), nn.BatchNorm1d(32),  nn.ReLU(),
-            nn.Conv1d(32,          64,  kernel_size=5, padding=2), nn.BatchNorm1d(64),  nn.ReLU(),
-            nn.Conv1d(64, PHYSIO_EMB_DIM, kernel_size=3, padding=1), nn.BatchNorm1d(PHYSIO_EMB_DIM), nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),
+        self.video_lstm = nn.LSTM(VIDEO_EMB_DIM, lstm_hidden, batch_first=True)
+        self.geo_gru    = GeometryGRUAttn(GEO_INPUT_DIM, GEO_HIDDEN_DIM, dropout=dropout * 0.7)
+        self.physio_enc = nn.Sequential(
+            nn.Linear(physio_in, 128), nn.LayerNorm(128),
+            nn.ReLU(), nn.Dropout(dropout),
         )
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.drop(self.net(x).squeeze(-1))  # (B, 128) — f_p
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  Teacher / Student 모델
-# ══════════════════════════════════════════════════════════════════════════════
-
-class E2ETeacherModel(nn.Module):
-    """
-    Architecture ① Teacher — End-to-End (raw inputs).
-
-    입력
-    ────
-      frames  : (B, T, 3, 224, 224)   영상 프레임 시퀀스
-      audio   : (B, T_audio)           raw 음성 파형 (16 kHz)
-      physio  : (B, 3, T_physio)       raw 생리신호 시계열 (ECG, EDA, Resp)
-
-    출력: (logits, physio_emb, video_emb, audio_emb)
-
-    KD 정렬 대상
-    ────────────
-      video_emb (f_v, 512) ↔ Student video_emb (f_v', 512)
-      audio_emb (f_a, 256) ↔ Student audio_emb (f_a', 256)
-    """
-    def __init__(self, num_classes: int = 2, dropout: float = 0.3,
-                 freeze_backbone: bool = True):
-        super().__init__()
-        self.video_enc  = VideoEncoder(pretrained=True, freeze=freeze_backbone)
-        self.audio_enc  = AudioEncoder(freeze=freeze_backbone)
-        self.physio_enc = PhysioEncoder(in_channels=3, dropout=dropout)
-
-        fusion_dim = VIDEO_EMB_DIM + AUDIO_EMB_DIM + PHYSIO_EMB_DIM  # 512+256+128 = 896
+        self.modal_gate = ModalityGate(lstm_hidden, AUDIO_EMB_DIM, 128,
+                                       proj_dim=lstm_hidden)
+        self.task_emb   = nn.Embedding(NUM_TASKS, TASK_EMB_DIM)
         self.classifier = nn.Sequential(
-            nn.Linear(fusion_dim, 256), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(256, num_classes),
+            nn.Linear(FUSED_EXP_DIM + TASK_EMB_DIM, 128),
+            nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, num_classes),
         )
 
-    def forward(self, frames, audio, physio):
-        video_emb  = self.video_enc(frames)    # (B, 512)
-        audio_emb  = self.audio_enc(audio)     # (B, 256)
-        physio_emb = self.physio_enc(physio)   # (B, 128)
-        fused  = torch.cat([video_emb, audio_emb, physio_emb], dim=1)
-        logits = self.classifier(fused)
-        return logits, physio_emb, video_emb, audio_emb
+    def forward(self, frame_feats: torch.Tensor, audio_emb: torch.Tensor,
+                physio: torch.Tensor, geometry: torch.Tensor,
+                task_id: torch.Tensor):
+        _, (h_v, _) = self.video_lstm(frame_feats)
+        v_emb = h_v[-1]                             # (B, 256)
+        g_emb = self.geo_gru(geometry)              # (B, 64)
+        p_emb = self.physio_enc(physio)             # (B, 128)
+
+        fused, _       = self.modal_gate(v_emb, audio_emb, p_emb)  # (B, 256)
+        fused_expanded = torch.cat([fused, g_emb], dim=1)           # (B, 320)
+        t_emb          = self.task_emb(task_id)
+        logits = self.classifier(torch.cat([fused_expanded, t_emb], dim=1))
+        return logits, fused_expanded
 
 
-class E2EStudentModel(nn.Module):
+class StudentCMABi(nn.Module):
     """
-    Architecture ① Student — End-to-End (배포 시 Webcam + Mic).
+    V2 Student (배포 모델) — eGeMAPS late fusion + GeometryGRUAttn.
 
-    Teacher 와 동일한 VideoEncoder / AudioEncoder 구조 → Feature KD 가능.
-
-    입력
-    ────
-      frames  : (B, T, 3, 224, 224)
-      audio   : (B, T_audio)
-
-    출력: (logits, video_emb, audio_emb)
+    fused_expanded = 320 → Teacher와 KD loss 정렬 가능.
+    ege_feats=None이면 eGeMAPS 경로를 건너뜀.
     """
-    def __init__(self, num_classes: int = 2, dropout: float = 0.3,
-                 freeze_backbone: bool = True):
+    BI_HIDDEN    = 128
+    EGE_PROJ_DIM = 64
+
+    def __init__(self, num_classes: int = 2, dropout: float = 0.3):
         super().__init__()
-        self.video_enc = VideoEncoder(pretrained=True, freeze=freeze_backbone)
-        self.audio_enc = AudioEncoder(freeze=freeze_backbone)
-
-        fusion_dim = VIDEO_EMB_DIM + AUDIO_EMB_DIM  # 512+256 = 768
+        self.video_lstm = nn.LSTM(
+            VIDEO_EMB_DIM, self.BI_HIDDEN,
+            batch_first=True, bidirectional=True,
+        )
+        self.geo_gru    = GeometryGRUAttn(GEO_INPUT_DIM, GEO_HIDDEN_DIM,
+                                          dropout=dropout * 0.7)
+        self.cross_attn = CrossModalAttention(
+            v_dim=self.BI_HIDDEN * 2, a_dim=AUDIO_EMB_DIM,
+            d_k=64, out_dim=self.BI_HIDDEN * 2, dropout=dropout * 0.3,
+        )
+        self.ege_branch = nn.Sequential(
+            nn.Linear(EGEMAP_DIM, self.EGE_PROJ_DIM),
+            nn.ReLU(),
+            nn.LayerNorm(self.EGE_PROJ_DIM),
+        )
+        self.ege_fusion = nn.Sequential(
+            nn.Linear(FUSED_EXP_DIM + self.EGE_PROJ_DIM, FUSED_EXP_DIM),
+            nn.ReLU(),
+            nn.LayerNorm(FUSED_EXP_DIM),
+        )
+        self.task_emb   = nn.Embedding(NUM_TASKS, TASK_EMB_DIM)
         self.classifier = nn.Sequential(
-            nn.Linear(fusion_dim, 256), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(256, num_classes),
+            nn.Linear(FUSED_EXP_DIM + TASK_EMB_DIM, 128),
+            nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, num_classes),
         )
 
-    def forward(self, frames, audio):
-        video_emb = self.video_enc(frames)   # (B, 512)
-        audio_emb = self.audio_enc(audio)    # (B, 256)
-        fused  = torch.cat([video_emb, audio_emb], dim=1)
-        logits = self.classifier(fused)
-        return logits, video_emb, audio_emb
+    def forward(self, frame_feats: torch.Tensor, audio_emb: torch.Tensor,
+                geometry: torch.Tensor, task_id: torch.Tensor,
+                ege_feats: torch.Tensor | None = None,
+                return_fused: bool = False):
+        """
+        frame_feats : (B, T, 512)
+        audio_emb   : (B, 256)
+        geometry    : (B, T, 24)
+        task_id     : (B,)
+        ege_feats   : (B, 88)  z-score 정규화된 eGeMAPS (없으면 skip)
+        """
+        lstm_out, _    = self.video_lstm(frame_feats)           # (B, T, 256)
+        g_emb          = self.geo_gru(geometry)                  # (B, 64)
+        fused, attn_w  = self.cross_attn(lstm_out, audio_emb)   # (B, 256), (B, T)
+        fused_expanded = torch.cat([fused, g_emb], dim=1)       # (B, 320)
+
+        if ege_feats is not None:
+            e_emb = self.ege_branch(ege_feats)                   # (B, 64)
+            fused_expanded = self.ege_fusion(
+                torch.cat([fused_expanded, e_emb], dim=1))       # (B, 320)
+
+        t_emb  = self.task_emb(task_id)
+        logits = self.classifier(torch.cat([fused_expanded, t_emb], dim=1))
+        # None 자리: 레거시 시그니처 (physio_emb, v_emb) 호환 — train 스크립트가 positional unpack
+        if return_fused:
+            return logits, None, None, audio_emb, attn_w, fused_expanded
+        return logits, None, None, audio_emb, attn_w
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  빠른 구조 확인용 (torchvision / transformers 없이도 shape 체크 가능)
+#  CBM (Concept Bottleneck Module — post-hoc XAI layer)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def print_model_summary():
+class CBMWithResidual(nn.Module):
     """
-    임베딩 차원 및 Fusion 구조 요약 출력 (실제 모델 로드 없이).
-    """
-    print("=" * 55)
-    print("  Architecture ① — End-to-End Model Summary")
-    print("=" * 55)
-    print(f"  VideoEncoder  : ResNet18 → {VIDEO_EMB_DIM}-dim  (f_v)")
-    print(f"  AudioEncoder  : Wav2Vec2 → {AUDIO_EMB_DIM}-dim  (f_a)")
-    print(f"  PhysioEncoder : 1D-CNN   → {PHYSIO_EMB_DIM}-dim  (f_p, Teacher only)")
-    print()
-    print(f"  Teacher fusion: {VIDEO_EMB_DIM}+{AUDIO_EMB_DIM}+{PHYSIO_EMB_DIM} = {VIDEO_EMB_DIM+AUDIO_EMB_DIM+PHYSIO_EMB_DIM} → 256 → num_classes")
-    print(f"  Student fusion: {VIDEO_EMB_DIM}+{AUDIO_EMB_DIM} = {VIDEO_EMB_DIM+AUDIO_EMB_DIM} → 256 → num_classes")
-    print()
-    print("  KD 정렬 대상:")
-    print(f"    f_v' ≈ f_v  (MSE, {VIDEO_EMB_DIM}-dim)")
-    print(f"    f_a' ≈ f_a  (MSE, {AUDIO_EMB_DIM}-dim)")
-    print("=" * 55)
+    목적:
+        train_egemap_kd.py로 학습된 StudentCMABi에 XAI용 CBM 레이어를 추가.
+        모델이 '왜 스트레스인가'를 개념 7개로 설명할 수 있게 함.
 
+    구조:
+        student_kd_fused_expanded.npy (320차원)
+            ↓
+        concept_predictor : Linear(320→128) → ReLU → Linear(128→7)
+            └ 320차원 내부 표현을 압축해서 개념 7개 수치로 변환
+              각 개념은 0~1 범위 없이 실수값으로 출력
+        concept_classifier : Linear(7→32) → ReLU → Linear(32→2)
+            └ 개념 7개만 보고 스트레스/비스트레스 점수(logit) 계산
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  Architecture 1-Hybrid: Encoder + LSTM
-# ══════════════════════════════════════════════════════════════════════════════
+        final = concept_logits + residual_w × StudentCMABi_logits
+            └ 개념 7개만으로는 정보가 부족해 StudentCMABi가 직접 계산한
+              점수를 residual_w 비율로 섞어서 보완 (Koh et al. 2020 Hybrid CBM)
 
-class HybridE2EModel(nn.Module):
+        residual_w=0 → 순수 CBM (완전 해석 가능, 성능 손실 위험)
+        residual_w>0 → 잔류 경로로 성능 보전
     """
-    Architecture ① E2E Encoder + LSTM
-    각 인코더(ResNet/Wav2Vec/1D-CNN) → 시간 흐름 학습(LSTM) → Classifier
-    """
-    def __init__(self, num_classes=2, hidden_dim=256, num_layers=1, dropout=0.3):
+    def __init__(self, fused_dim: int = FUSED_EXP_DIM, n_concepts: int = 7,
+                 residual_w: float = 0.7, dropout: float = 0.3):
         super().__init__()
-        # 기존 인코더 재사용
-        self.video_enc  = VideoEncoder(pretrained=True, freeze=True)
-        self.audio_enc  = AudioEncoder(freeze=True)
-        self.physio_enc = PhysioEncoder(in_channels=3)
-        
-        # 합쳐진 차원: 512 + 256 + 128 = 896
-        input_dim = VIDEO_EMB_DIM + AUDIO_EMB_DIM + PHYSIO_EMB_DIM
-        
-        self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, 
-                            num_layers=num_layers, batch_first=True, dropout=dropout)
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, 128), nn.ReLU(), nn.Dropout(dropout),
-            nn.Linear(128, num_classes)
-        )
+        self.residual_w = residual_w
+        self.concept_predictor = nn.Sequential(
+            nn.Linear(fused_dim, 128), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, n_concepts))
+        self.concept_classifier = nn.Sequential(
+            nn.Linear(n_concepts, 32), nn.ReLU(), nn.Linear(32, 2))
 
-    def forward(self, frames, audio, physio):
-        # 1. 인코딩: 각 모달리티별로 특징 추출
-        v_emb = self.video_enc(frames) # (B, 512)
-        a_emb = self.audio_enc(audio)  # (B, 256)
-        p_emb = self.physio_enc(physio)# (B, 128)
-        
-        # 2. 결합 후 LSTM 입력 형태로 변환 (B, 1, 896)
-        fused = torch.cat([v_emb, a_emb, p_emb], dim=1).unsqueeze(1)
-        
-        # 3. LSTM 통과
-        _, (h_n, _) = self.lstm(fused)
-        
-        # 4. 분류
-        logits = self.classifier(h_n[-1])
-        return logits, p_emb, v_emb, a_emb
+    def forward(self, fused_exp: torch.Tensor,
+                base_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        fused_exp   : (B, fused_dim)  StudentCMABi의 fused_expanded
+        base_logits : (B, 2)          StudentCMABi의 분류 로짓
+        → final_logits (B, 2), c_pred (B, n_concepts)
+        """
+        c_pred  = self.concept_predictor(fused_exp)
+        c_logit = self.concept_classifier(c_pred)
+        return c_logit + self.residual_w * base_logits.detach(), c_pred
