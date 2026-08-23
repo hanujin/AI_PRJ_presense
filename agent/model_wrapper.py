@@ -17,6 +17,8 @@ from models_e2e import StudentCMABi, CBMWithResidual, GEO_INPUT_DIM, EGEMAP_DIM,
 from dataset_e2e import TASK_TO_ID
 import config as _cfg
 
+_WEIGHTS_DIR = _root / 'weights'   # presense/weights/ — 추론용 가중치 폴더
+
 CONCEPT_NAMES = ['목소리 거칠기', '음색 불안정성', '음성 두께', '음성 피치',
                  '표정 변화량',   '입술 긴장도',   '눈썹 찡그림']
 N_CONCEPTS  = 7
@@ -110,11 +112,8 @@ class StressInferenceEngine:
     # ── 모델 로드 ──────────────────────────────────────────────────────────────
 
     def _load_model(self):
-        ckpt_dir  = _cfg.CHECKPOINTS_DIR / 'binary'
-        final_dir = ckpt_dir / 'final'
-
-        backbone_path = final_dir / 'student_kd_best.pt'
-        cbm_path      = ckpt_dir  / 'cbm_bi_residual_v2_w0.5_lc4.0_best.pt'
+        backbone_path = _WEIGHTS_DIR / 'student_kd_best.pt'
+        cbm_path      = _WEIGHTS_DIR / 'cbm_bi_residual_v2_w0.8_lc4.0_best.pt'
 
         if not backbone_path.exists():
             print(f"⛔ backbone 없음: {backbone_path}"); self.model = None; return
@@ -162,12 +161,11 @@ class StressInferenceEngine:
                 p.requires_grad = False
 
             self.audio_proj = nn.Linear(768, 256).to(self.device)
-            ckpt_dir = _cfg.CHECKPOINTS_DIR / 'binary'
             for proj_name in [
-                'final/student_kd_best.pt',
-                'final/kd_student_prev_best.pt',
+                'student_kd_best.pt',
+                'kd_student_prev_best.pt',
             ]:
-                proj_path = ckpt_dir / proj_name
+                proj_path = _WEIGHTS_DIR / proj_name
                 if not proj_path.exists():
                     continue
                 ckpt = torch.load(proj_path, map_location='cpu')
@@ -191,9 +189,8 @@ class StressInferenceEngine:
             self.wav2vec = None; self.audio_proj = None
 
     def _load_geo_scaler(self):
-        ckpt_dir = _cfg.CHECKPOINTS_DIR / 'binary'
-        mean_p = ckpt_dir / 'geo_scaler_mean.npy'
-        std_p  = ckpt_dir / 'geo_scaler_std.npy'
+        mean_p = _WEIGHTS_DIR / 'geo_scaler_mean.npy'
+        std_p  = _WEIGHTS_DIR / 'geo_scaler_std.npy'
         if mean_p.exists() and std_p.exists():
             self.geo_mean = np.load(mean_p)  # (24,)
             self.geo_std  = np.load(std_p)   # (24,)
@@ -205,7 +202,7 @@ class StressInferenceEngine:
 
     def _load_ege_scaler(self):
         """학습 시 사용된 eGeMAPS 통계 로드 (z-score 정규화용)."""
-        ege_path = _cfg.CHECKPOINTS_DIR / 'binary' / 'ege_maps_feats.npy'
+        ege_path = _WEIGHTS_DIR / 'ege_maps_feats.npy'
         if ege_path.exists():
             ege_np = np.load(ege_path).astype(np.float32)
             self._ege_mean = ege_np.mean(0)   # (88,)
