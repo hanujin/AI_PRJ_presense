@@ -9,13 +9,13 @@
 | 목표 | 내용 |
 |---|---|
 | **배포 조건** | 웹캠 + 마이크만으로 추론 (생리신호 센서 불필요) |
-| **학습 전략** | LUPI KD — 학습 시에만 생리신호(ECG/EDA/호흡) 사용 |
+| **학습 전략** | KD — 학습 시에만 생리신호(ECG/EDA/호흡) 사용 |
 | **설명 가능성** | CBM(Concept Bottleneck Model) — 7개 개념으로 예측 근거 제공 |
 | **데이터** | StressID (영상+음성+생리신호 멀티모달, 이진 분류 Stress/Non-stress) |
 
 ---
 
-## 최종 모델 아키텍처 (V2)
+## 최종 모델 아키텍처
 
 ### 전체 파이프라인
 
@@ -23,41 +23,41 @@
 [학습 시]
 생리신호(132-dim) ─┐
 영상 프레임        ─┤─ Teacher ─┐
-음성 임베딩        ─┘          │ LUPI KD (Phase 1)
+음성 임베딩        ─┘          │ KD (Phase 1)
                                ▼
-영상 프레임        ─┐         Student V2 (DualBranchStudentCMABiV2)
+영상 프레임        ─┐         StudentCMABi
 음성 임베딩        ─┤             │  backbone 동결
 eGeMAPS(88-dim)   ─┘             ▼
-                            CBM Head (Phase 2)
+                            CBMWithResidual (Phase 2)
                                  │
                                  ▼
                        7개 개념 + 스트레스 판정
 
 [추론 시]
-웹캠 영상 + 마이크 음성 → Student V2 → CBM → 스트레스 판정 + XAI 설명
+웹캠 영상 + 마이크 음성 → StudentCMABi → CBMWithResidual → 스트레스 판정 + XAI 설명
 ```
 
 ---
 
-### Phase 1 — LUPI Knowledge Distillation
+### Phase 1 — Knowledge Distillation
 
-#### Teacher: `DualBranchTeacher`
+#### Teacher
 
 학습 시에만 사용. 영상 + 음성 + 생리신호 3개 모달리티 입력.
 
 ```
-frame_feats (B, 16, 512)  ─── LSTM(512→256) ─────────────────► h_T (B, 256) ─┐
-audio_emb   (B, 256)      ────────────────────────────────────────────────────► ModalityGate
-physio      (B, 132)      ─── Linear(132→128) + BN + ReLU ───────────────────►  (3-way softmax)
-                                                                                  fused (B, 256)
-geometry    (B, 16, 24)   ─── GRU(24→64) + Dropout + LayerNorm ────────────── g_emb (B, 64)
+frame_feats (B, 16, 512)  ─── LSTM(512→256) ──────────────────► h_T (B, 256) ─┐
+audio_emb   (B, 256)      ───────────────────────────────────────────────────► ModalityGate
+physio      (B, 132)      ─── Linear(132→128) + BN + ReLU ──────────────────►  (3-way softmax)
+                                                                                 fused (B, 256)
+geometry    (B, 16, 24)   ─── GRU(24→64) + Dropout + LayerNorm ─────────── g_emb (B, 64)
 
 fused_expanded = cat[fused, g_emb]          (B, 320)
 task_emb       = Embedding(11 tasks, 8)     (B, 8)
 logits = Linear(328→128) → ReLU → Dropout → Linear(128→2)
 ```
 
-#### Student V2: `DualBranchStudentCMABiV2`
+#### StudentCMABi
 
 배포용. 영상 + 음성 + eGeMAPS 입력 (생리신호 불필요).
 
@@ -78,8 +78,7 @@ frame_feats (B, 16, 512)
 geometry    (B, 16, 24)
       └── GeometryGRUAttn ──────────────────────────── g_emb (B, 64)
             GRU(24→64) → all hidden states
-            TemporalAttentionPool: score=Linear(64,1) → softmax(T) → weighted sum
-            (V1 GRU 마지막 hidden state → V2 attention-weighted pool로 교체)
+            score=Linear(64,1) → softmax(T) → weighted sum
 
 fused_expanded = cat[fused, g_emb]           (B, 320)
 
@@ -87,16 +86,11 @@ eGeMAPS     (B, 88)   [선택적 입력]
       └── ege_branch: Linear(88→64) → ReLU → LayerNorm   → (B, 64)
       └── ege_fusion: Linear(384→320) → ReLU → LayerNorm  → fused_expanded (B, 320)
 
-task_emb       = Embedding(11 tasks, 8)      (B, 8)
-logits_LUPI    = Linear(328→128) → ReLU → Dropout(0.3) → Linear(128→2)
+task_emb = Embedding(11 tasks, 8)      (B, 8)
+logits   = Linear(328→128) → ReLU → Dropout(0.3) → Linear(128→2)
 ```
 
-**V1 대비 변경점:**
-- `GRU last hidden` → `GeometryGRUAttn` (TemporalAttentionPool): 발표 중 스트레스 피크 구간 포착
-- `eGeMAPS late fusion`: Jitter/Shimmer/F0 통계 → 음색 불안정성·음성 피치 R² 대폭 개선
-- CrossModalAttention `a_dim=256` 유지 → V1 가중치 완전 전이
-
-#### LUPI KD 손실
+#### KD 손실
 
 ```
 L = 0.3 · CE(s_logits, labels)
@@ -108,10 +102,10 @@ L = 0.3 · CE(s_logits, labels)
 
 ### Phase 2 — Residual CBM (XAI)
 
-Student backbone 동결 후, fused_expanded 위에 CBM head 학습.
+StudentCMABi backbone 동결 후, fused_expanded 위에 CBM head 학습.
 
 ```
-fused_expanded (B, 320)   [Student backbone 동결]
+fused_expanded (B, 320)   [StudentCMABi backbone 동결]
         │
         ├─ concept_predictor
         │     Linear(320→128) → ReLU → Dropout(0.3) → Linear(128→7)
@@ -121,13 +115,14 @@ fused_expanded (B, 320)   [Student backbone 동결]
               Linear(7→32) → ReLU → Linear(32→2)
               c_logit (B, 2)
 
-final_logit = c_logit + 0.80 × logits_LUPI
+final_logit = c_logit + 0.80 × base_logits   [student_kd_logits.npy 캐시 사용]
 ```
 
 **CBM 손실**
 
 ```
-L = CE(final_logit, labels) + 4.0 · MSE(c_pred, concept_labels)
+Stage 1: MSE(c_pred, concept_labels)                              # concept predictor warmup
+Stage 2: CE(final_logit, labels) + 4.0 · MSE(c_pred, concept_labels)
 ```
 
 ---
@@ -148,22 +143,6 @@ L = CE(final_logit, labels) + 4.0 · MSE(c_pred, concept_labels)
 
 ---
 
-### 입출력 형식 요약
-
-| 구분 | 이름 | 형태 | 설명 |
-|---|---|---|---|
-| 입력 | frame_feats | (B, 16, 512) | ResNet18 per-frame feature, 16프레임 샘플링 |
-| 입력 | audio_emb | (B, 256) | Wav2Vec2 768-dim → Linear(256) |
-| 입력 | geometry | (B, 16, 24) | MediaPipe 파생 geometry 지표 24개 |
-| 입력 | eGeMAPS | (B, 88) | opensmile eGeMAPS v02 Functionals (Optional) |
-| 입력 | task_id | (B,) | 발표 과제 유형 (11종) |
-| 내부 | fused_expanded | (B, 320) | BiLSTM+CMA+GeoGRUAttn(+eGeMAPS) 융합 표현 |
-| 출력 | logits | (B, 2) | 스트레스 / 비스트레스 |
-| 출력 | c_pred | (B, 7) | 7개 개념 예측값 (XAI) |
-| 출력 | attn_w | (B, 16) | 프레임별 어텐션 가중치 (시각화용) |
-
----
-
 ## 최종 성능
 
 ### 모델별 성능 비교 (GroupShuffleSplit seed=42, val n=121)
@@ -171,7 +150,7 @@ L = CE(final_logit, labels) + 4.0 · MSE(c_pred, concept_labels)
 | 모델 | Acc | Sensitivity | Specificity | R² avg (val) | 비고 |
 |---|---|---|---|---|---|
 | Teacher (영상+음성+생리신호) | 0.7917 | — | — | — | 학습 전용, 배포 불가 |
-| Student V1 LUPI KD | 0.8099 | — | — | — | 배포용, 영상+음성만 |
+| StudentCMABi KD | 0.8099 | — | — | — | 배포용, 영상+음성만 |
 | Residual CBM V1 (w=0.7) | 0.8182 | 0.8382 | 0.7925 | 0.5965 | V1 기준선 |
 | **Residual CBM V2 (w=0.8, λ=4.0)** | **0.8182** | **0.8529** | 0.7736 | **0.6916** | **최종 채택** |
 
@@ -182,13 +161,13 @@ L = CE(final_logit, labels) + 4.0 · MSE(c_pred, concept_labels)
 
 | 방법 | Acc | 비고 |
 |---|---|---|
-| 기준선 (LUPI KD BiLSTM V1) | 0.8099 | CBM 이전 backbone |
+| 기준선 (KD BiLSTM V1) | 0.8099 | CBM 이전 backbone |
 | Residual CBM V1 (w=0.7) | 0.8182 | V1 최고 Acc |
 | Residual CBM V1 (w=0.5) | 0.7934 | V1 최고 R² (스크립트 기준 0.8085) |
-| Joint LUPI+CBM | 0.7934 | backbone gradient 충돌 |
+| Joint KD+CBM | 0.7934 | backbone gradient 충돌 |
 | DANN (λ=0.2) | 0.8167* | 단일 seed noise |
 | 5-seed 앙상블 | 0.8083 | Majority Vote 기준 |
-| GeometryGRUAttn (V2 backbone) | 0.8017 | LUPI 단독, eGeMAPS 없이 |
+| GeometryGRUAttn (V2 backbone) | 0.8017 | KD 단독, eGeMAPS 없이 |
 | **Residual CBM V2 (w=0.8, λ=4.0)** | **0.8182** | R² +9.5%p (val), **최종** |
 
 ### 데이터셋 정보
@@ -217,20 +196,17 @@ StressInferenceEngine
   └── opensmile → eGeMAPS   (B, 88)
         │
         ▼
-PreSenseModel V2
-  └── DualBranchStudentCMABiV2 + CBMWithLUPIResidual
+PreSenseModel
+  └── StudentCMABi + CBMWithResidual
         │
         ├── stress_prob (float)
         ├── c_pred (7개 개념값)
         └── attn_w (16 프레임 가중치)
         │
         ▼
-SHAP Explainer → concept_contrib (attribution)
-        │
-        ▼
 FeedbackEngine
   ├── DSPy ChainOfThought
-  ├── ChromaDB RAG (논문 20편)
+  ├── ChromaDB RAG (data/papers/ 자동 처리)
   └── LuxiaLM (솔트룩스 Luxia API)
         │
         ▼
@@ -245,41 +221,28 @@ FeedbackEngine
 presense/
 ├── ai/
 │   ├── models/
-│   │   ├── models_e2e.py                      # DualBranchStudentCMABiV2, Teacher, CrossModalAttention
-│   │   │                                      # TemporalAttentionPool, GeometryGRUAttn
-│   │   └── models_cbm.py                      # CBM 구조, 개념 이름 정의
+│   │   └── models_e2e.py          # Teacher, StudentCMABi, CBMWithResidual
 │   ├── train/
-│   │   ├── train_lupi_kd_cma_bi.py            # Phase 1 V1: LUPI KD (BiLSTM)
-│   │   ├── train_egemap_kd.py               # StudentCMABi KD 학습 (eGeMAPS + GeometryGRUAttn)
-│   │   ├── train_cbm_bi_lupi_residual.py      # Phase 2 V1: Residual CBM
-│   │   ├── train_egemap_cbm.py                # Phase 2 V2: Residual CBM (eGeMAPS)
-│   │   ├── train_multiseed_eval.py            # 다중 seed 신뢰도 평가
-│   │   └── train_ensemble_multiseed.py        # 동일 split 앙상블
+│   │   ├── train_egemap_kd.py     # Phase 1: KD backbone 학습
+│   │   └── train_egemap_cbm.py    # Phase 2: Residual CBM 학습
 │   ├── data/
-│   │   └── dataset_e2e.py                     # StressID 데이터 로더, N_FRAMES=16
+│   │   └── dataset_e2e.py         # StressID 데이터 로더
 │   └── feature_analysis/
-│       ├── extract_landmarks_per_frame.py     # MediaPipe geometry 추출
-│       └── extract_ege_maps.py                # opensmile eGeMAPS v02 추출
+│       ├── extract_geometry_feats.py  # MediaPipe geometry 추출
+│       └── extract_ege_maps.py        # opensmile eGeMAPS v02 추출
 ├── agent/
-│   ├── model_wrapper.py                       # 실시간 추론 엔진 (V2)
-│   ├── agent_main.py                          # 웹캠 + 마이크 스트리밍
-│   ├── feedback_engine.py                     # FeedbackEngine (DSPy + RAG)
-│   ├── dspy_pipeline.py                       # StressCoachModule (ChainOfThought)
-│   ├── rag_db.py                              # ChromaDB 논문 RAG
-│   ├── rag_evaluator.py                       # RAGAS 오프라인 평가
-│   ├── shap_explainer.py                      # SHAP KernelExplainer
-│   └── luxia_client.py                        # 솔트룩스 Luxia API 클라이언트
+│   ├── model_wrapper.py           # StressInferenceEngine + PreSenseModel
+│   ├── feedback_engine.py         # FeedbackEngine (베이스라인 캘리브레이션 + LLM)
+│   ├── dspy_pipeline.py           # StressCoachModule (DSPy ChainOfThought)
+│   └── rag_db.py                  # ChromaDB RAG (data/papers/ 자동 처리)
+├── data/
+│   └── papers/                    # PDF 논문 → PaperRAG() 초기화 시 자동 처리
 ├── checkpoints/binary/
-│   ├── final/
-│   │   ├── dual_lupi_v2_student_best.pt           # Phase 1 V2 최종 (Acc=0.8017)
-│   │   ├── dual_lupi_cma_bi_student_best.pt       # Phase 1 V1 (참고용)
-│   │   └── dual_lupi_cma_teacher_best.pt          # Teacher (학습 전용)
-│   ├── cbm_bi_lupi_residual_v2_w0.8_lc4.0_best.pt  # Phase 2 V2 최종 ★
-│   ├── cbm_bi_lupi_residual_w0.7_best.pt           # Phase 2 V1 (참고용)
-│   ├── dual_lupi_v2_fused_expanded.npy            # V2 fused_expanded 캐시 (N, 320)
-│   └── ege_maps_feats.npy                          # eGeMAPS 피처 캐시 (N, 88)
-├── EXPERIMENTS.md                             # 전체 실험 이력
-├── XAI_고민정리.md                             # CBM 설계 고민 기록
+│   ├── student_kd_best.pt             # Phase 1 최종 (Acc=0.8099)
+│   ├── cbm_bi_residual_v2_w0.8_lc4.0_best.pt  # Phase 2 최종 ★
+│   ├── student_kd_fused_expanded.npy  # fused_expanded 캐시 (N, 320)
+│   └── student_kd_logits.npy          # logits 캐시 (N, 2)
+├── config.py
 └── README.md
 ```
 
@@ -288,16 +251,13 @@ presense/
 ## 빠른 시작
 
 ```bash
-# 실시간 에이전트 실행
-cd presense && python agent/agent_main.py
-# 'c': 영점 보정(Calibration), 'q': 종료
+# Phase 1: StudentCMABi KD 학습
+cd presense
+python ai/feature_analysis/extract_ege_maps.py   # eGeMAPS 추출 (~3분)
+python ai/train/train_egemap_kd.py               # KD backbone 학습
 
-# StudentCMABi KD 학습 (eGeMAPS + GeometryGRUAttn)
-cd presense && python ai/feature_analysis/extract_ege_maps.py   # eGeMAPS 추출 (~3분)
-cd presense && python ai/train/train_egemap_kd.py               # KD backbone 학습
-
-# Phase 2 V2: Residual CBM
-cd presense && python ai/train/train_egemap_cbm.py              # CBM 학습 (그리드 탐색)
+# Phase 2: Residual CBM 학습
+python ai/train/train_egemap_cbm.py              # CBM 학습 (그리드 탐색)
 ```
 
 ---
@@ -309,6 +269,6 @@ Python 3.12 / PyTorch 2.x / MPS(Apple Silicon) or CUDA
 torchvision, torchaudio, transformers (Wav2Vec2)
 mediapipe, opencv-python, opensmile
 scikit-learn, numpy, pandas
-dspy-ai, chromadb
-librosa, shap
+dspy-ai, chromadb, pdfplumber
+librosa
 ```
