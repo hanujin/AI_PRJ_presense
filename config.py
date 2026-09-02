@@ -51,6 +51,10 @@ TRAIN_RATIO = 0.70
 VAL_RATIO   = 0.15
 TEST_RATIO  = 0.15
 
+# ─── 추론 임계값 ──────────────────────────────────────────────────────────────
+# 에러 분석 결과 FP(17) >> FN(5) → 0.40으로 낮춰 val_acc 0.8017 → 0.8099
+STRESS_THRESHOLD = 0.40
+
 # 스트레스 유발 태스크 (heuristic fallback labels 생성 시 사용)
 STRESS_TASKS = {"Counting1", "Counting2", "Counting3", "Math", "Stroop", "Speaking", "Reading"}
 RELAX_TASKS  = {"Breathing", "Video1", "Video2", "Relax"}

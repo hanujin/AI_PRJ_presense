@@ -1,10 +1,19 @@
 # Exclude results folder as requested
 results/
 checkpoints/
+archive/
+*.npy
+*.pt
+
+# UI (Teammate's work - ignore in this branch)
+frontend/
+node_modules/
+.next/
+.env*
 
 # Standard Python ignores
 __pycache__/
-*.py[cod]
+...
 *$py.class
 
 # OS junk

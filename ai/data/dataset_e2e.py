@@ -51,9 +51,15 @@ except ImportError:
     _HAS_TORCHVISION = False
 
 # ─── 경로 상수 ────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).parent.parent
+BASE_DIR    = Path(__file__).parent.parent.parent.parent  # AI_Project/
 VIDEOS_DIR  = BASE_DIR / "StressID Dataset" / "Videos"
-PHYSIO_DIR  = BASE_DIR / "StressID Dataset" / "Physiological"  # TODO: 실제 경로 확인
+PHYSIO_DIR  = BASE_DIR / "StressID Dataset" / "Physiological"
+
+# ─── Task 매핑 (11개 task) ────────────────────────────────────────────────────
+TASK_TYPES = ['Breathing', 'Counting1', 'Counting2', 'Counting3', 'Math',
+              'Reading', 'Relax', 'Speaking', 'Stroop', 'Video1', 'Video2']
+TASK_TO_ID = {t: i for i, t in enumerate(TASK_TYPES)}
+NUM_TASKS  = len(TASK_TYPES)
 
 # ─── 처리 상수 ────────────────────────────────────────────────────────────────
 N_FRAMES       = 16      # 과제당 샘플링할 프레임 수
@@ -204,29 +210,47 @@ class StressIDRawDataset(Dataset):
         audio       : (max_len,)
         label       : int
     """
-    def __init__(self, samples: list, mode: str = 'teacher'):
+    CACHE_DIR = BASE_DIR / 'StressID Dataset' / '.raw_cache'
+
+    def __init__(self, samples: list, mode: str = 'teacher', with_task: bool = False):
         assert mode in ('teacher', 'student')
-        self.samples = samples
-        self.mode    = mode
+        self.samples   = samples
+        self.mode      = mode
+        self.with_task = with_task
+        self.CACHE_DIR.mkdir(exist_ok=True)
+
+    def _get_task_id(self, idx: int) -> torch.Tensor:
+        task_full = self.samples[idx]['task']
+        task_type = task_full.split('_', 1)[1] if '_' in task_full else task_full
+        return torch.tensor(TASK_TO_ID.get(task_type, 0), dtype=torch.long)
 
     def __len__(self):
         return len(self.samples)
 
+    def _cache_path(self, idx):
+        return self.CACHE_DIR / f"{idx}_{self.mode}.pt"
+
     def __getitem__(self, idx):
-        s     = self.samples[idx]
-        path  = s['video_path']
-        label = torch.tensor(s['label'], dtype=torch.long)
-
-        frames = extract_frames(path)
-        audio  = load_audio(path)
-
-        if self.mode == 'teacher':
-            # .txt 확장자 사용 (확인 결과 Physiological 폴더 내 파일들은 .txt 임)
-            physio_path = PHYSIO_DIR / s['subject'] / f"{s['task']}.txt"
-            physio = load_physio_ts(physio_path)
-            return frames, audio, physio, label
+        cache = self._cache_path(idx)
+        if cache.exists():
+            data = torch.load(cache, weights_only=True)
         else:
-            return frames, audio, label
+            s     = self.samples[idx]
+            path  = s['video_path']
+            label = torch.tensor(s['label'], dtype=torch.long)
+            frames = extract_frames(path)
+            audio  = load_audio(path)
+            if self.mode == 'teacher':
+                physio_path = PHYSIO_DIR / s['subject'] / f"{s['task']}.txt"
+                physio = load_physio_ts(physio_path)
+                data = (frames, audio, physio, label)
+            else:
+                data = (frames, audio, label)
+            torch.save(data, cache)
+
+        if self.with_task:
+            return (*data, self._get_task_id(idx))
+        return data
 
 
 # ══════════════════════════════════════════════════════════════════════════════
