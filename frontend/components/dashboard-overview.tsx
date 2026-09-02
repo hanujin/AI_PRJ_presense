@@ -7,6 +7,36 @@ import { useSupabaseAuth } from "@/components/supabase-provider";
 import { useLang } from "@/lib/i18n";
 import { loadDashboardData, type DiagnosisRecord, type PresentationRecord } from "@/lib/supabase/data";
 
+type Translate = (key: string, fallback?: string) => string;
+
+function localizeDiagnosis(value: string, t: Translate) {
+  const fixedLabels: Record<string, string> = {
+    "Latest session result": "diag.latestSessionResult",
+    "Average stress": "diag.averageStress",
+    "Next coaching focus": "diag.nextCoachingFocus",
+    "Generated from the most recent practice session.": "diag.generatedFromSession",
+    "Mostly stable delivery": "diag.stableDelivery",
+    "Practice slower transitions between your main explanation blocks and leave a short pause after each key term.": "diag.nextAction",
+  };
+  const fixedKey = fixedLabels[value];
+  if (fixedKey) return t(fixedKey);
+
+  const phaseKey = (phase: string) => `diag.phase.${phase.toLowerCase()}`;
+  const peakMatch = value.match(/^Peak pressure reached (\d+(?:\.\d+)?)% around the (Open|Build|Core|Close) phase\. Deck: (.+)\.$/);
+  if (peakMatch) {
+    const [, stress, phase, deck] = peakMatch;
+    return t("diag.peakPressure")
+      .replace("{value}", stress)
+      .replace("{phase}", t(phaseKey(phase)))
+      .replace("{deck}", deck === "No deck used" ? t("diag.noDeck") : deck);
+  }
+
+  const pressureMatch = value.match(/^Noticeable (Open|Build|Core|Close)-section pressure$/);
+  if (pressureMatch) return t("diag.noticeablePressure").replace("{phase}", t(phaseKey(pressureMatch[1])));
+
+  return value;
+}
+
 function StressTrend({ records }: { records: PresentationRecord[] }) {
   const { t } = useLang();
   if (records.length === 0) {
@@ -49,6 +79,24 @@ function StressBar({ percent, color }: { percent: number; color: string }) {
   return (
     <div style={{ background: "var(--border)", borderRadius: 4, height: 8, overflow: "hidden" }}>
       <div style={{ height: "100%", borderRadius: 4, width: `${percent}%`, background: color, transition: "width 0.5s ease" }} />
+    </div>
+  );
+}
+
+function DiagnosisModal({ diagnosis, onClose }: { diagnosis: DiagnosisRecord; onClose: () => void }) {
+  const { t } = useLang();
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div className="card diagnosis-modal" role="dialog" aria-modal="true" aria-labelledby="diagnosis-modal-title" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="Close diagnosis details">
+          <X size={18} />
+        </button>
+        <div className="diagnosis-modal-eyebrow">{t("kpi.latestDiagnosis")}</div>
+        <h2 id="diagnosis-modal-title" className="diagnosis-modal-title">{localizeDiagnosis(diagnosis.label, t)}</h2>
+        {diagnosis.value && <div className="diagnosis-modal-value">{localizeDiagnosis(diagnosis.value, t)}</div>}
+        <div className="diagnosis-modal-detail">{localizeDiagnosis(diagnosis.detail, t)}</div>
+      </div>
     </div>
   );
 }
@@ -145,16 +193,16 @@ function ReviewModal({ record, onClose, severityClass }: { record: PresentationR
           <div className="coach-stack" style={{ gap: 8 }}>
             <div className="coach-card coach-alert">
               <h3>{t("modal.overallJudgment")}</h3>
-              <p>{record.result}</p>
+              <p>{localizeDiagnosis(record.result, t)}</p>
             </div>
             <div className="coach-card coach-data">
               <h3>{t("modal.peakPressureAnalysis")}</h3>
-              <p>{record.diagnosis || t("modal.noDiagnosis")}</p>
+              <p>{record.diagnosis ? localizeDiagnosis(record.diagnosis, t) : t("modal.noDiagnosis")}</p>
             </div>
             {record.nextAction && (
               <div className="coach-card coach-ok">
                 <h3>{t("modal.recommendedNextStep")}</h3>
-                <p>{record.nextAction}</p>
+                <p>{localizeDiagnosis(record.nextAction, t)}</p>
               </div>
             )}
           </div>
@@ -182,6 +230,7 @@ export function DashboardOverview() {
   const [isLoading, setIsLoading] = useState(hasEnv);
   const [loadError, setLoadError] = useState("");
   const [selectedRecord, setSelectedRecord] = useState<PresentationRecord | null>(null);
+  const [selectedDiagnosis, setSelectedDiagnosis] = useState<DiagnosisRecord | null>(null);
 
   useEffect(() => {
     if (!hasEnv || !user) {
@@ -213,7 +262,7 @@ export function DashboardOverview() {
   const latestAvg = parseFloat(presentationRecords[0]?.stressAverage ?? "0");
   const prevAvg = parseFloat(presentationRecords[1]?.stressAverage ?? "0");
   const stressDelta = totalSessions >= 2 ? latestAvg - prevAvg : null;
-  const latestDiagnosis = diagnosisHistory[0]?.detail ?? "No sessions yet";
+  const latestDiagnosis = diagnosisHistory[0] ? localizeDiagnosis(diagnosisHistory[0].detail, t) : "No sessions yet";
 
   // Current Focus Area (Progress Report §1.3.2): the practice context that needs
   // the most attention — derived from the highest-stress recent session's scene.
@@ -251,6 +300,7 @@ export function DashboardOverview() {
         severityClass={severityClass}
       />
     )}
+    {selectedDiagnosis && <DiagnosisModal diagnosis={selectedDiagnosis} onClose={() => setSelectedDiagnosis(null)} />}
     <main className="page-content">
       <div className="page-top">
         <div>
@@ -308,7 +358,13 @@ export function DashboardOverview() {
           <div className="kpi-sub">{t("kpi.currentFocusSub")}</div>
         </div>
 
-        <div className="kpi-card">
+        <button
+          type="button"
+          className="kpi-card kpi-card-button"
+          onClick={() => diagnosisHistory[0] && setSelectedDiagnosis(diagnosisHistory[0])}
+          disabled={!diagnosisHistory[0]}
+          aria-label={diagnosisHistory[0] ? `${t("kpi.latestDiagnosis")}: ${t("table.review")}` : t("kpi.latestDiagnosis")}
+        >
           <div className="kpi-top">
             <div className="kpi-icon" style={{ background: "rgba(139,92,246,0.1)", color: "#7c3aed" }}>
               <Sparkles size={16} />
@@ -317,7 +373,7 @@ export function DashboardOverview() {
           <div className="kpi-value" style={{ fontSize: 18, marginBottom: 6, lineHeight: 1.3, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const }}>{latestDiagnosis.slice(0, 40)}{latestDiagnosis.length > 40 ? "…" : ""}</div>
           <div className="kpi-label">{t("kpi.latestDiagnosis")}</div>
           <div className="kpi-sub">{t("kpi.latestDiagnosisSub")}</div>
-        </div>
+        </button>
       </div>
 
       {/* Main grid: trend chart + scene breakdown */}

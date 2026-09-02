@@ -23,10 +23,10 @@ const dict: Record<string, { ko: string; en: string }> = {
   "lang.toggle": { ko: "언어 전환", en: "Toggle language" },
 
   // ── Auth ──
-  "auth.headline": { ko: "더 똑똑하게 연습하고, 더 잘 발표하세요.", en: "Practice smarter, present better." },
+  "auth.headline": { ko: "더 똑똑하게 연습하고,\n더 잘 발표하세요.", en: "Practice smarter, present better." },
   "auth.desc": {
-    ko: "웹캠과 마이크만으로 실시간 스트레스 감지 — 생체신호로부터의 Knowledge Distillation 기반. 웨어러블이 필요 없습니다.",
-    en: "Real-time stress detection from your webcam and microphone — powered by Knowledge Distillation from biosignals. No wearables required.",
+    ko: "웹캠과 마이크만으로 실시간 스트레스 감지하는 플랫폼",
+    en: "Real-time stress detection platform\nfrom your webcam and microphone",
   },
   "auth.feature1": { ko: "실시간 카메라 + 마이크 분석", en: "Live camera + microphone analysis" },
   "auth.feature2": { ko: "세션마다 AI 스트레스 감지", en: "AI stress detection after each session" },
@@ -49,7 +49,7 @@ const dict: Record<string, { ko: string; en: string }> = {
   "auth.backToLogin": { ko: "← 로그인으로 돌아가기", en: "← Back to login" },
   "auth.notConfigured": { ko: "Supabase 미설정 — 인증이 비활성화되었습니다.", en: "Supabase not configured — auth is disabled." },
   "auth.pleaseWait": { ko: "잠시만 기다려 주세요...", en: "Please wait..." },
-  "auth.enterDashboard": { ko: "대시보드 입장", en: "Enter Dashboard" },
+  "auth.enterDashboard": { ko: "로그인", en: "Enter" },
   "auth.createAccountBtn": { ko: "계정 생성", en: "Create Account" },
   "auth.recoverySent": { ko: "복구 이메일을 보냈습니다. 받은편지함에서 링크를 확인하세요.", en: "Recovery email sent. Check your inbox and click the link." },
   "auth.recoveryFailed": { ko: "복구 이메일 전송에 실패했습니다.", en: "Failed to send recovery email." },
@@ -160,6 +160,19 @@ const dict: Record<string, { ko: string; en: string }> = {
   "sev.high": { ko: "높음", en: "High" },
   "sev.moderate": { ko: "보통", en: "Moderate" },
   "sev.low": { ko: "낮음", en: "Low" },
+  "diag.latestSessionResult": { ko: "최근 세션 결과", en: "Latest session result" },
+  "diag.averageStress": { ko: "평균 스트레스", en: "Average stress" },
+  "diag.nextCoachingFocus": { ko: "다음 코칭 집중 영역", en: "Next coaching focus" },
+  "diag.generatedFromSession": { ko: "AI 진단", en: "AI diagnosis" },
+  "diag.noDeck": { ko: "사용한 자료 없음", en: "No deck used" },
+  "diag.phase.open": { ko: "도입", en: "Open" },
+  "diag.phase.build": { ko: "전개", en: "Build" },
+  "diag.phase.core": { ko: "핵심", en: "Core" },
+  "diag.phase.close": { ko: "마무리", en: "Close" },
+  "diag.peakPressure": { ko: "최고 압박은 {phase} 단계에서 {value}%까지 높아졌습니다. 자료: {deck}.", en: "Peak pressure reached {value}% around the {phase} phase. Deck: {deck}." },
+  "diag.noticeablePressure": { ko: "{phase} 구간에서 눈에 띄는 압박", en: "Noticeable {phase}-section pressure" },
+  "diag.stableDelivery": { ko: "전반적으로 안정적인 발표", en: "Mostly stable delivery" },
+  "diag.nextAction": { ko: "주요 설명 구간 사이의 전환을 더 천천히 연습하고, 핵심 용어마다 짧게 멈춰 보세요.", en: "Practice slower transitions between your main explanation blocks and leave a short pause after each key term." },
 
   // ── Practice ──
   "practice.title": { ko: "연습 세션", en: "Practice Session" },

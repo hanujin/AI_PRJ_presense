@@ -19,7 +19,7 @@ real — but the **classifier head is untrained** until you provide a checkpoint
 Without one, `stressScore` is essentially arbitrary. This is expected: the repo
 ships model *code*, not trained weights (`checkpoints/` is gitignored).
 
-The server auto-loads `checkpoints/hybrid_student_kd_best.pt` if present (its
+The server auto-loads `checkpoints/student_kd/student_kd_best.pt` if present (its
 key structure — `video_enc` + `audio_enc` + `classifier`, no physio/LSTM — is
 verified to match `E2EStudentModel`). Override with another file via:
 

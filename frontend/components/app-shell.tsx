@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, HelpCircle, Languages, LogOut, Search, Settings, Sparkles, UserRound, Video } from "lucide-react";
+import { BarChart3, Bell, HelpCircle, Languages, LogOut, Search, Settings, UserRound, Video } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { useLang } from "@/lib/i18n";
 
@@ -49,11 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="layout">
         <aside className="sidebar">
           <Link href="/" className="sidebar-brand">
-            <div className="sidebar-brand-icon"><Sparkles size={16} /></div>
-            <div>
-              <strong>PreSense</strong>
-              <span>{t("brand.tagline")}</span>
-            </div>
+            <BrandLogo />
           </Link>
         </aside>
         <div className="main-area">
@@ -69,11 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="layout">
       <aside className="sidebar">
         <Link href="/" className="sidebar-brand">
-          <div className="sidebar-brand-icon"><Sparkles size={16} /></div>
-          <div>
-            <strong>PreSense</strong>
-            <span>{t("brand.tagline")}</span>
-          </div>
+          <BrandLogo />
         </Link>
 
         <nav className="sidebar-nav">

@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LockKeyhole, Sparkles } from "lucide-react";
+import { LockKeyhole } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
 export default function ResetPasswordPage() {
@@ -45,13 +46,7 @@ export default function ResetPasswordPage() {
     <div className="auth-layout">
       <div className="auth-left">
         <div className="auth-brand-row">
-          <div className="auth-brand-icon">
-            <Sparkles size={18} color="white" />
-          </div>
-          <div>
-            <div className="auth-brand-name">PreSense</div>
-            <div className="auth-brand-sub">Presentation AI</div>
-          </div>
+          <BrandLogo />
         </div>
         <h1 className="auth-headline">Set a new password.</h1>
         <p className="auth-desc">Choose a strong password to protect your PreSense account.</p>

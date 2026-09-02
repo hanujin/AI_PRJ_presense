@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BrainCircuit, Languages, LockKeyhole, Mail, Sparkles, UserRound, Video } from "lucide-react";
+import { BrainCircuit, Languages, LockKeyhole, Mail, UserRound, Video } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { useLang } from "@/lib/i18n";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -81,13 +82,7 @@ export function AuthPanel() {
 
       <div className="auth-left">
         <div className="auth-brand-row">
-          <div className="auth-brand-icon">
-            <Sparkles size={18} color="white" />
-          </div>
-          <div>
-            <div className="auth-brand-name">PreSense</div>
-            <div className="auth-brand-sub">{t("brand.tagline")}</div>
-          </div>
+          <BrandLogo />
         </div>
 
         <h1 className="auth-headline">{t("auth.headline")}</h1>
@@ -183,7 +178,18 @@ export function AuthPanel() {
                   <label className="field-label">{t("auth.password")}</label>
                   <div className="field-input">
                     <LockKeyhole size={15} className="field-icon" />
-                    <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder={t("auth.passwordPlaceholder")} />
+                    <input
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && mode === "login" && hasEnv && email && password && !isSubmitting) {
+                          e.preventDefault();
+                          handleSubmit();
+                        }
+                      }}
+                      type="password"
+                      placeholder={t("auth.passwordPlaceholder")}
+                    />
                   </div>
                 </div>
               </div>
