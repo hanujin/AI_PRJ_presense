@@ -23,6 +23,12 @@ export type DiagnosisRecord = {
   detail: string;
 };
 
+export type SessionHistoryRecord = PresentationRecord & {
+  timeline: number[];
+  videoUrl: string | null;
+  videoPath: string | null;
+};
+
 export type PersistedSettings = {
   primary: Record<string, boolean>;
   sections: Record<string, boolean>;
@@ -36,7 +42,11 @@ type SavePracticeSessionInput = {
   diagnosis: string;
   nextAction: string;
   sceneLabel: string;
+  timeline: number[];
+  video: Blob | null;
 };
+
+const LOCAL_HISTORY_KEY = "presense-local-session-history";
 
 function formatDuration(durationSeconds: number) {
   const minutes = Math.floor(durationSeconds / 60);
@@ -157,6 +167,55 @@ export async function loadUserSettings() {
   };
 }
 
+export async function loadSessionHistory(): Promise<SessionHistoryRecord[]> {
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) {
+    try {
+      return JSON.parse(window.localStorage.getItem(LOCAL_HISTORY_KEY) ?? "[]") as SessionHistoryRecord[];
+    } catch {
+      return [];
+    }
+  }
+
+  let { data, error } = await supabase
+    .from("presentation_records")
+    .select("id, title, session_date, duration_seconds, result, stress_average, diagnosis, next_action, scene_label, timeline, video_path")
+    .order("session_date", { ascending: false });
+  // Existing projects may not have run the video/timeline migration yet.
+  // Keep their older session history visible instead of rendering a blank page.
+  if (error) {
+    const legacy = await supabase
+      .from("presentation_records")
+      .select("id, title, session_date, duration_seconds, result, stress_average, diagnosis, next_action, scene_label")
+      .order("session_date", { ascending: false });
+    data = legacy.data as typeof data;
+    error = legacy.error;
+  }
+  if (error) throw error;
+
+  return Promise.all((data ?? []).map(async (row) => {
+    let videoUrl: string | null = null;
+    if (row.video_path) {
+      const { data: signed } = await supabase.storage.from("session-videos").createSignedUrl(row.video_path, 60 * 60);
+      videoUrl = signed?.signedUrl ?? null;
+    }
+    return {
+      id: row.id,
+      title: row.title,
+      date: formatSessionDate(row.session_date),
+      duration: formatDuration(row.duration_seconds),
+      result: row.result,
+      stressAverage: Number(row.stress_average).toFixed(2),
+      diagnosis: row.diagnosis,
+      nextAction: row.next_action ?? "",
+      sceneLabel: row.scene_label ?? "",
+      timeline: Array.isArray(row.timeline) ? row.timeline.map(Number) : [],
+      videoUrl,
+      videoPath: row.video_path ?? null,
+    };
+  }));
+}
+
 export async function saveUserSettings(settings: PersistedSettings) {
   const supabase = getSupabaseBrowserClient();
 
@@ -195,6 +254,23 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
   const supabase = getSupabaseBrowserClient();
 
   if (!supabase) {
+    const sessionDate = new Date().toISOString();
+    const localRecord: SessionHistoryRecord = {
+      id: crypto.randomUUID(),
+      title: input.title?.trim() || `${input.sceneLabel} Practice`,
+      date: formatSessionDate(sessionDate),
+      duration: formatDuration(input.durationSeconds),
+      result: input.result,
+      stressAverage: input.averageStress.toFixed(2),
+      diagnosis: input.diagnosis,
+      nextAction: input.nextAction,
+      sceneLabel: input.sceneLabel,
+      timeline: input.timeline,
+      videoUrl: null,
+      videoPath: null,
+    };
+    const existing = await loadSessionHistory();
+    window.localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify([localRecord, ...existing]));
     return;
   }
 
@@ -214,7 +290,7 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
   const sessionDate = new Date().toISOString();
   const title = input.title?.trim() || `${input.sceneLabel} Practice`;
 
-  const { error: recordError } = await supabase.from("presentation_records").insert({
+  const recordInput = {
     user_id: user.id,
     title,
     session_date: sessionDate,
@@ -224,10 +300,33 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
     diagnosis: input.diagnosis,
     next_action: input.nextAction,
     scene_label: input.sceneLabel,
-  });
+    timeline: input.timeline,
+  };
+  let { data: record, error: recordError } = await supabase.from("presentation_records").insert(recordInput).select("id").single();
+  // Compatibility path for an existing database before schema.sql is rerun.
+  if (recordError) {
+    const { timeline: _timeline, ...legacyInput } = recordInput;
+    const legacy = await supabase.from("presentation_records").insert(legacyInput).select("id").single();
+    record = legacy.data;
+    recordError = legacy.error;
+  }
 
   if (recordError) {
     throw recordError;
+  }
+
+  if (input.video && record) {
+    const extension = input.video.type.includes("mp4") ? "mp4" : "webm";
+    const path = `${user.id}/${record.id}.${extension}`;
+    const { error: uploadError } = await supabase.storage.from("session-videos").upload(path, input.video, {
+      contentType: input.video.type || `video/${extension}`,
+      upsert: false,
+    });
+    // The session record remains valuable even if the optional storage bucket
+    // has not been created yet. schema.sql enables this upload path.
+    if (!uploadError) {
+      await supabase.from("presentation_records").update({ video_path: path }).eq("id", record.id);
+    }
   }
 
   const diagnosisEntries = [
@@ -256,4 +355,19 @@ export async function savePracticeSession(input: SavePracticeSessionInput) {
   if (diagnosisError) {
     throw diagnosisError;
   }
+}
+
+export async function deletePracticeSession(id: string, videoPath: string | null) {
+  const supabase = getSupabaseBrowserClient();
+  if (!supabase) {
+    const remaining = (await loadSessionHistory()).filter((record) => record.id !== id);
+    window.localStorage.setItem(LOCAL_HISTORY_KEY, JSON.stringify(remaining));
+    return;
+  }
+
+  if (videoPath) {
+    await supabase.storage.from("session-videos").remove([videoPath]);
+  }
+  const { error } = await supabase.from("presentation_records").delete().eq("id", id);
+  if (error) throw error;
 }

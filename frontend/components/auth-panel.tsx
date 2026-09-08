@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { BrainCircuit, Languages, LockKeyhole, Mail, UserRound, Video } from "lucide-react";
+import { Languages, LockKeyhole, Mail, UserRound } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { useLang } from "@/lib/i18n";
@@ -82,26 +82,12 @@ export function AuthPanel() {
 
       <div className="auth-left">
         <div className="auth-brand-row">
-          <BrandLogo />
+          <BrandLogo className="auth-brand-logo" />
         </div>
 
         <h1 className="auth-headline">{t("auth.headline")}</h1>
         <p className="auth-desc">{t("auth.desc")}</p>
 
-        <div className="auth-features">
-          <div className="auth-feature">
-            <div className="auth-feature-icon"><Video size={15} color="white" /></div>
-            {t("auth.feature1")}
-          </div>
-          <div className="auth-feature">
-            <div className="auth-feature-icon"><BrainCircuit size={15} color="white" /></div>
-            {t("auth.feature2")}
-          </div>
-          <div className="auth-feature">
-            <div className="auth-feature-icon"><UserRound size={15} color="white" /></div>
-            {t("auth.feature3")}
-          </div>
-        </div>
       </div>
 
       <div className="auth-right">

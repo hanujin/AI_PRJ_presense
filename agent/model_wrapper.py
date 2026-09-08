@@ -17,7 +17,8 @@ from models_e2e import StudentCMABi, CBMWithResidual, GEO_INPUT_DIM, EGEMAP_DIM,
 from dataset_e2e import TASK_TO_ID
 import config as _cfg
 
-_WEIGHTS_DIR = _root / 'weights'   # presense/weights/ — 추론용 가중치 폴더
+_CHECKPOINT_DIR = _root / "checkpoints" / "student_kd"
+_ARTIFACT_DIR = _CHECKPOINT_DIR / "artifacts"
 
 CONCEPT_NAMES = ['목소리 거칠기', '음색 불안정성', '음성 두께', '음성 피치',
                  '표정 변화량',   '입술 긴장도',   '눈썹 찡그림']
@@ -112,13 +113,13 @@ class StressInferenceEngine:
     # ── 모델 로드 ──────────────────────────────────────────────────────────────
 
     def _load_model(self):
-        backbone_path = _WEIGHTS_DIR / 'student_kd_best.pt'
-        cbm_path      = _WEIGHTS_DIR / 'cbm_bi_residual_v2_w0.8_lc4.0_best.pt'
+        backbone_path = _CHECKPOINT_DIR / "student_kd_best.pt"
+        cbm_path      = _ARTIFACT_DIR / "cbm_bi_residual_v2_w0.8_lc4.0_best.pt"
 
         if not backbone_path.exists():
-            print(f"⛔ backbone 없음: {backbone_path}"); self.model = None; return
+            print(f"[error] backbone missing: {backbone_path}"); self.model = None; return
         if not cbm_path.exists():
-            print(f"⛔ CBM 없음: {cbm_path}"); self.model = None; return
+            print(f"[error] CBM missing: {cbm_path}"); self.model = None; return
 
         backbone_state = torch.load(backbone_path, map_location='cpu')['model_state_dict']
         cbm_ckpt       = torch.load(cbm_path,      map_location='cpu')
@@ -132,7 +133,7 @@ class StressInferenceEngine:
 
         acc = cbm_ckpt.get('val_acc', 0)
         r2  = cbm_ckpt.get('r2', 0)
-        print(f"✅ PreSenseModel V2 로드  residual_w={residual_w}  val_acc={acc:.4f}  R²={r2:.4f}")
+        print(f"[model] PreSenseModel V2 loaded: residual_w={residual_w}, val_acc={acc:.4f}, r2={r2:.4f}")
 
     # ── 피처 추출기 ────────────────────────────────────────────────────────────
 
@@ -147,9 +148,9 @@ class StressInferenceEngine:
             self.resnet.eval()
             for p in self.resnet.parameters():
                 p.requires_grad = False
-            print("✅ ResNet18 로드")
+            print("[model] ResNet18 loaded")
         except Exception as e:
-            print(f"⚠️  ResNet18 로드 실패: {e}"); self.resnet = None
+            print(f"[warning] ResNet18 load failed: {e}"); self.resnet = None
 
         # Wav2Vec2 base + Linear(768→256) 프로젝션
         try:
@@ -165,7 +166,7 @@ class StressInferenceEngine:
                 'student_kd_best.pt',
                 'kd_student_prev_best.pt',
             ]:
-                proj_path = _WEIGHTS_DIR / proj_name
+                proj_path = _CHECKPOINT_DIR / proj_name
                 if not proj_path.exists():
                     continue
                 ckpt = torch.load(proj_path, map_location='cpu')
@@ -176,42 +177,42 @@ class StressInferenceEngine:
                 }
                 if proj_sd:
                     self.audio_proj.load_state_dict(proj_sd)
-                    print(f"✅ Wav2Vec2 + proj 로드 ({proj_name})")
+                    print(f"[model] Wav2Vec2 projection loaded ({proj_name})")
                     break
             else:
-                print("⚠️  proj 가중치 없음 — 랜덤 초기화")
+                print("[warning] Wav2Vec2 projection weights missing; using random initialization")
 
             self.audio_proj.eval()
             for p in self.audio_proj.parameters():
                 p.requires_grad = False
         except Exception as e:
-            print(f"⚠️  Wav2Vec2 로드 실패: {e}")
+            print(f"[warning] Wav2Vec2 load failed: {e}")
             self.wav2vec = None; self.audio_proj = None
 
     def _load_geo_scaler(self):
-        mean_p = _WEIGHTS_DIR / 'geo_scaler_mean.npy'
-        std_p  = _WEIGHTS_DIR / 'geo_scaler_std.npy'
+        mean_p = _ARTIFACT_DIR / "geo_scaler_mean.npy"
+        std_p  = _ARTIFACT_DIR / "geo_scaler_std.npy"
         if mean_p.exists() and std_p.exists():
             self.geo_mean = np.load(mean_p)  # (24,)
             self.geo_std  = np.load(std_p)   # (24,)
-            print("✅ Geometry scaler 로드")
+            print("[model] geometry scaler loaded")
         else:
             self.geo_mean = np.zeros(GEO_INPUT_DIM, dtype=np.float32)
             self.geo_std  = np.ones(GEO_INPUT_DIM,  dtype=np.float32)
-            print("⚠️  Geometry scaler 없음 — 정규화 스킵")
+            print("[warning] geometry scaler missing; normalization skipped")
 
     def _load_ege_scaler(self):
         """학습 시 사용된 eGeMAPS 통계 로드 (z-score 정규화용)."""
-        ege_path = _WEIGHTS_DIR / 'ege_maps_feats.npy'
+        ege_path = _ARTIFACT_DIR / "ege_maps_feats.npy"
         if ege_path.exists():
             ege_np = np.load(ege_path).astype(np.float32)
             self._ege_mean = ege_np.mean(0)   # (88,)
             self._ege_std  = ege_np.std(0)    # (88,)
-            print("✅ eGeMAPS scaler 로드")
+            print("[model] eGeMAPS scaler loaded")
         else:
             self._ege_mean = None
             self._ege_std  = None
-            print("⚠️  eGeMAPS scaler 없음 — eGeMAPS 추론 스킵")
+            print("[warning] eGeMAPS scaler missing; feature extraction skipped")
 
 
 
@@ -220,7 +221,7 @@ class StressInferenceEngine:
     def _init_mediapipe(self):
         model_path = Path(__file__).parent / 'face_landmarker.task'
         if not model_path.exists():
-            print(f"⚠️  face_landmarker.task 없음: {model_path}")
+            print(f"[warning] face landmarker asset missing: {model_path}")
             self.face_mesh = None; self._mp = None; return
         try:
             import mediapipe as mp
@@ -235,9 +236,9 @@ class StressInferenceEngine:
             )
             self._mp       = mp
             self.face_mesh = mp.tasks.vision.FaceLandmarker.create_from_options(opts)
-            print("✅ MediaPipe FaceLandmarker 초기화 (blendshapes + transform ON)")
+            print("[model] MediaPipe face landmarker initialized")
         except Exception as e:
-            print(f"⚠️  MediaPipe 초기화 실패: {e}")
+            print(f"[warning] MediaPipe initialization failed: {e}")
             self.face_mesh = None; self._mp = None
 
     def set_task(self, task_name: str):
@@ -400,10 +401,11 @@ class StressInferenceEngine:
 
     # ── 추론 ──────────────────────────────────────────────────────────────────
 
-    def predict(self, video_np, audio_np):
+    def predict(self, video_np, audio_np, *, record_session=True):
         """
         video_np : (16, H, W, 3) uint8 BGR
         audio_np : (160000,) float32  16kHz
+        record_session : disable for shared, stateless web inference
 
         Returns:
             stress_prob      : float  0~1
@@ -449,17 +451,18 @@ class StressInferenceEngine:
         audio_feat = self.analyze_audio(audio_np)
         video_feat = self._analyze_video_from_geo(video_np, geo[0].cpu().numpy())
 
-        self.session_log.append({
-            'timestamp':       time.time() - self._session_start,
-            'stress_prob':     stress_prob,
-            'gate_w':          gate_w,
-            'dominant':        dominant,
-            'concept_contrib': concept_contrib.copy(),
-            'audio_feat':      audio_feat.copy() if audio_feat else {},
-            'video_feat':      video_feat.copy() if video_feat else {},
-            'frame':           video_np[-1].copy(),
-            'attn_weights':    attn[0].cpu().numpy().tolist() if attn is not None else [],
-        })
+        if record_session:
+            self.session_log.append({
+                'timestamp':       time.time() - self._session_start,
+                'stress_prob':     stress_prob,
+                'gate_w':          gate_w,
+                'dominant':        dominant,
+                'concept_contrib': concept_contrib.copy(),
+                'audio_feat':      audio_feat.copy() if audio_feat else {},
+                'video_feat':      video_feat.copy() if video_feat else {},
+                'frame':           video_np[-1].copy(),
+                'attn_weights':    attn[0].cpu().numpy().tolist() if attn is not None else [],
+            })
 
         return stress_prob, gate_w, dominant, audio_feat, video_feat, concept_contrib
 

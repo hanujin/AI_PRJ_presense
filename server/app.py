@@ -1,54 +1,67 @@
-"""
-PreSense inference server (FastAPI).
+"""FastAPI service for PreSense multimodal stress inference."""
 
-Endpoints
-─────────
-  GET  /health  → liveness + whether a trained checkpoint is loaded
-  POST /infer   → multipart "frame" (JPEG/PNG) → { stressScore, confidence }
-
-Run
-───
-  pip install -r requirements.txt
-  uvicorn app:app --host 0.0.0.0 --port 8000
-
-Point the frontend at it with:
-  NEXT_PUBLIC_SIGNAL_SOURCE=live
-  NEXT_PUBLIC_INFERENCE_URL=http://localhost:8000
-"""
+from __future__ import annotations
 
 import io
 
-from fastapi import FastAPI, File, UploadFile
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 
-from inference import get_model, predict
+from inference import get_engine, health, predict
 
-app = FastAPI(title="PreSense Inference Server")
-
+app = FastAPI(title="PreSense Multimodal Inference Server")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 @app.on_event("startup")
-def _warmup() -> None:
-    # Build the model (and load the checkpoint) once at startup so the first
-    # request is not penalized by ResNet/Wav2Vec2 download + init.
-    get_model()
+def warmup() -> None:
+    try:
+        get_engine()
+    except Exception as error:
+        # Keep /health available with the initialization diagnostic.
+        print(f"[inference] startup failed: {error}")
 
 
 @app.get("/health")
-def health() -> dict:
-    from inference import _checkpoint_loaded
-    return {"status": "ok", "checkpointLoaded": _checkpoint_loaded}
+def get_health() -> dict:
+    status = health()
+    return {"status": "ok" if status["checkpointLoaded"] else "degraded", **status}
 
 
 @app.post("/infer")
-async def infer(frame: UploadFile = File(...)) -> dict:
-    data = await frame.read()
-    img = Image.open(io.BytesIO(data))
-    return predict(img)
+async def infer(
+    frames: list[UploadFile] = File(...),
+    audio: UploadFile = File(...),
+    task: str = Form("Speaking"),
+) -> dict:
+    if len(frames) != 16:
+        raise HTTPException(422, "Exactly 16 JPEG/PNG frames are required.")
+
+    decoded_frames: list[np.ndarray] = []
+    for frame in frames:
+        payload = await frame.read()
+        image = np.asarray(Image.open(io.BytesIO(payload)).convert("RGB"))
+        decoded_frames.append(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+    audio_samples = np.frombuffer(await audio.read(), dtype=np.float32)
+    if audio_samples.size == 0:
+        raise HTTPException(422, "Audio samples are required.")
+    # The browser sends 16 kHz Float32 PCM. Pad short warm-up windows for the model.
+    target_samples = 160_000
+    if audio_samples.size < target_samples:
+        audio_samples = np.pad(audio_samples, (target_samples - audio_samples.size, 0))
+    else:
+        audio_samples = audio_samples[-target_samples:]
+
+    try:
+        return predict(np.stack(decoded_frames), audio_samples, task)
+    except Exception as error:
+        raise HTTPException(500, str(error)) from error

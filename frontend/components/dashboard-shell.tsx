@@ -16,10 +16,11 @@ import {
   Upload,
   Users,
   Waves,
+  X,
 } from "lucide-react";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { agentStarters, initialTimeline, postSessionHighlights, practiceScenes, samplePresentation } from "@/lib/dashboard-data";
-import { createSimulatedSignal, inferFrame, SIGNAL_SOURCE, type LiveInferenceFrame, type LiveSignalController } from "@/lib/live-signal";
+import { createSimulatedSignal, inferMultimodalFrame, SIGNAL_SOURCE, type LiveInferenceFrame, type LiveSignalController } from "@/lib/live-signal";
 import { useLang } from "@/lib/i18n";
 import { savePracticeSession } from "@/lib/supabase/data";
 
@@ -35,9 +36,6 @@ type ReportSummary = {
   noticeable: boolean;
   deckName: string;
 };
-// FeedbackEngine states (Progress Report §1.2.3): a LEARNING baseline phase,
-// then Z-score-deviation states. "steady" is the neutral in-baseline band.
-type FeedbackState = "idle" | "learning" | "stable" | "steady" | "mid" | "high";
 type SceneId = (typeof practiceScenes)[number]["id"];
 type DeckFile = {
   name: string;
@@ -45,7 +43,6 @@ type DeckFile = {
   url: string;
   source: "uploaded" | "sample";
 };
-type FeedbackMode = "silent" | "gentle" | "active";
 
 const SAMPLE_DECK: DeckFile = {
   name: samplePresentation.name,
@@ -83,33 +80,6 @@ function buildAgentReply(input: string, t: (k: string) => string, peakText: stri
 }
 
 const PHASES = ["Open", "Build", "Core", "Close"] as const;
-const BASELINE_WINDOW = 15;
-
-const FEEDBACK_LABELS: Record<FeedbackState, string> = {
-  idle: "STBY",
-  learning: "LEARNING",
-  stable: "STABLE",
-  steady: "STEADY",
-  mid: "MID",
-  high: "HIGH",
-};
-
-// FeedbackEngine (Progress Report §1.2.3): establish a personal baseline (μ, σ)
-// from the first 15 observations, then classify by Z-score deviation:
-// deviation > 2.0 → HIGH, > 1.0 → MID, < -1.0 → STABLE.
-function classifyFeedback(history: number[]): FeedbackState {
-  if (history.length === 0) return "idle";
-  if (history.length < BASELINE_WINDOW) return "learning";
-  const baseline = history.slice(0, BASELINE_WINDOW);
-  const mean = baseline.reduce((s, v) => s + v, 0) / baseline.length;
-  const variance = baseline.reduce((s, v) => s + (v - mean) ** 2, 0) / baseline.length;
-  const std = Math.sqrt(variance) || 1e-4;
-  const deviation = (history[history.length - 1] - mean) / std;
-  if (deviation > 2.0) return "high";
-  if (deviation > 1.0) return "mid";
-  if (deviation < -1.0) return "stable";
-  return "steady";
-}
 
 // The 12-bin timeline is 4 phases × 3 bins (Progress Report §1.3.3, §2.3).
 function summarizeTimeline(bins: number[]) {
@@ -122,6 +92,16 @@ function summarizeTimeline(bins: number[]) {
   const peakPhase = PHASES[Math.min(PHASES.length - 1, Math.floor(peakBin / 3))];
   const mostStressfulPhase = PHASES[phaseAvgs.indexOf(Math.max(...phaseAvgs))];
   return { peakValue, peakBin, peakPhase, mostStressfulPhase };
+}
+
+function buildSessionTimeline(history: number[]) {
+  if (history.length === 0) return initialTimeline;
+  return Array.from({ length: 12 }, (_, bin) => {
+    const start = Math.floor((bin / 12) * history.length);
+    const end = Math.max(start + 1, Math.floor(((bin + 1) / 12) * history.length));
+    const values = history.slice(start, end);
+    return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 100);
+  });
 }
 
 function StressChart({ series }: { series: number[] }) {
@@ -247,12 +227,21 @@ export function DashboardShell() {
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioChunksRef = useRef<Float32Array[]>([]);
+  const audioSampleRateRef = useRef(48_000);
+  const frameBufferRef = useRef<Blob[]>([]);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const sessionVideoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const tickRef = useRef<number | null>(null);
   const deckObjectUrlRef = useRef<string | null>(null);
   const stressHistoryRef = useRef<number[]>([]);
   const signalRef = useRef<LiveSignalController | null>(null);
   const inferInFlightRef = useRef(false);
+  const analysisGenerationRef = useRef(0);
+  const inferenceAbortRef = useRef<AbortController | null>(null);
 
   const [sessionState, setSessionState] = useState<SessionState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
@@ -260,7 +249,6 @@ export function DashboardShell() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [stressScore, setStressScore] = useState(0.38);
   const [confidence, setConfidence] = useState(0);
-  const [feedbackState, setFeedbackState] = useState<FeedbackState>("idle");
   const [liveStatus, setLiveStatus] = useState<"idle" | "ok" | "error">("idle");
   const [timeline, setTimeline] = useState(initialTimeline);
   const [report, setReport] = useState<ReportSummary | null>(null);
@@ -269,10 +257,14 @@ export function DashboardShell() {
   const [deck, setDeck] = useState<DeckFile | null>(SAMPLE_DECK);
   const [slideIndex, setSlideIndex] = useState(0);
   const [cameraReady, setCameraReady] = useState(false);
-  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>("gentle");
   const [saveStatus, setSaveStatus] = useState("");
   const [sessionTitle, setSessionTitle] = useState("");
   const [saved, setSaved] = useState(false);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveVideo, setSaveVideo] = useState(true);
+  const [recordedVideo, setRecordedVideo] = useState<Blob | null>(null);
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState("");
+  const [recordingFinalizing, setRecordingFinalizing] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     { role: "agent", text: t("report.chatIntro") },
   ]);
@@ -337,15 +329,52 @@ export function DashboardShell() {
     });
   }
 
+  function startSessionRecording(stream: MediaStream) {
+    if (typeof MediaRecorder === "undefined") return;
+    recordedChunksRef.current = [];
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+      ? "video/webm;codecs=vp9,opus"
+      : "video/webm";
+    const recorder = new MediaRecorder(stream, { mimeType });
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+    };
+    recorder.onstop = () => {
+      const video = new Blob(recordedChunksRef.current, { type: recorder.mimeType || "video/webm" });
+      setRecordedVideo(video);
+      setRecordedVideoUrl(URL.createObjectURL(video));
+      setRecordingFinalizing(false);
+    };
+    mediaRecorderRef.current = recorder;
+    recorder.start(1000);
+  }
+
+  function stopSessionRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder?.state === "recording") {
+      setRecordingFinalizing(true);
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
+  }
+
   function stopAnalysis() {
+    analysisGenerationRef.current += 1;
+    inferenceAbortRef.current?.abort();
+    inferenceAbortRef.current = null;
+    inferInFlightRef.current = false;
+    audioChunksRef.current = [];
+    frameBufferRef.current = [];
     if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
     if (tickRef.current) { window.clearInterval(tickRef.current); tickRef.current = null; }
     if (audioContextRef.current) { void audioContextRef.current.close(); audioContextRef.current = null; }
     analyserRef.current = null;
+    audioProcessorRef.current = null;
     setAudioLevel(0);
   }
 
   function cleanupMedia() {
+    stopSessionRecording();
     stopAnalysis();
     if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
     [mainVideoRef.current, pipVideoRef.current].forEach((video) => {
@@ -377,9 +406,23 @@ export function DashboardShell() {
     analyser.fftSize = 512;
     const source = ctx.createMediaStreamSource(stream);
     source.connect(analyser);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    processor.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      audioChunksRef.current.push(new Float32Array(input));
+      let samples = audioChunksRef.current.reduce((total, chunk) => total + chunk.length, 0);
+      const limit = audioSampleRateRef.current * 10;
+      while (samples > limit && audioChunksRef.current.length > 1) {
+        samples -= audioChunksRef.current.shift()?.length ?? 0;
+      }
+    };
+    source.connect(processor);
+    processor.connect(ctx.destination);
     const data = new Uint8Array(analyser.frequencyBinCount);
     audioContextRef.current = ctx;
     analyserRef.current = analyser;
+    audioProcessorRef.current = processor;
+    audioSampleRateRef.current = ctx.sampleRate;
 
     const sample = () => {
       analyser.getByteFrequencyData(data);
@@ -422,7 +465,6 @@ export function DashboardShell() {
     stressHistoryRef.current.push(frame.stressScore);
     setStressScore(frame.stressScore);
     setConfidence(frame.confidence);
-    setFeedbackState(classifyFeedback(stressHistoryRef.current));
   }
 
   // Grab whichever video element currently holds the live webcam stream.
@@ -445,23 +487,52 @@ export function DashboardShell() {
     return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/jpeg", 0.8));
   }
 
-  // Send the current webcam frame to the inference server and apply the result.
+  function getRecentAudioPcm() {
+    const chunks = audioChunksRef.current;
+    const inputLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+    if (inputLength === 0) return new Float32Array(0);
+    const input = new Float32Array(inputLength);
+    let offset = 0;
+    chunks.forEach((chunk) => { input.set(chunk, offset); offset += chunk.length; });
+    const ratio = audioSampleRateRef.current / 16_000;
+    const output = new Float32Array(Math.floor(input.length / ratio));
+    for (let index = 0; index < output.length; index += 1) {
+      output[index] = input[Math.min(Math.floor(index * ratio), input.length - 1)];
+    }
+    return output;
+  }
+
+  // Send the latest 16 webcam frames and 10-second audio buffer to the model.
   async function requestLiveFrame() {
     if (inferInFlightRef.current) return;
-    const blob = await captureFrameBlob();
-    if (!blob) return;
+    const generation = analysisGenerationRef.current;
     inferInFlightRef.current = true;
     try {
-      applyFrame(await inferFrame(blob));
+      const blob = await captureFrameBlob();
+      if (generation !== analysisGenerationRef.current || !blob) return;
+      frameBufferRef.current.push(blob);
+      if (frameBufferRef.current.length > 16) frameBufferRef.current.shift();
+      if (frameBufferRef.current.length < 16) return;
+      const audio = getRecentAudioPcm();
+      if (audio.length === 0) return;
+      const controller = new AbortController();
+      inferenceAbortRef.current = controller;
+      const frame = await inferMultimodalFrame(frameBufferRef.current, audio, "Speaking", controller.signal);
+      if (generation !== analysisGenerationRef.current) return;
+      applyFrame(frame);
       setLiveStatus("ok");
     } catch {
-      setLiveStatus("error");
+      if (generation === analysisGenerationRef.current) setLiveStatus("error");
     } finally {
-      inferInFlightRef.current = false;
+      if (generation === analysisGenerationRef.current) {
+        inferInFlightRef.current = false;
+        inferenceAbortRef.current = null;
+      }
     }
   }
 
   async function handleStartSession() {
+    stopAnalysis();
     try {
       setSessionState("starting");
       setErrorMessage("");
@@ -471,12 +542,20 @@ export function DashboardShell() {
       setStressScore(0.38);
       setConfidence(0);
       stressHistoryRef.current = [];
+      audioChunksRef.current = [];
+      frameBufferRef.current = [];
       signalRef.current = createSimulatedSignal();
       signalRef.current.reset();
-      setFeedbackState("learning");
       setLiveStatus(SIGNAL_SOURCE === "live" ? "idle" : "ok");
       setSaveStatus("");
       setSaved(false);
+      setSaveDialogOpen(false);
+      setSaveVideo(true);
+      setRecordedVideo(null);
+      if (recordedVideoUrl) {
+        URL.revokeObjectURL(recordedVideoUrl);
+        setRecordedVideoUrl("");
+      }
       setChatMessages([{ role: "agent", text: t("report.chatWaiting") }]);
 
       let stream = streamRef.current;
@@ -488,6 +567,7 @@ export function DashboardShell() {
       attachStreamToVideos(stream);
 
       startAudioMeter(stream);
+      startSessionRecording(stream);
       setSessionState("live");
 
       // Inference loop runs at 1.5s intervals (Progress Report §1.2.4).
@@ -518,14 +598,14 @@ export function DashboardShell() {
   }
 
   function handleStopSession() {
+    stopSessionRecording();
     stopAnalysis();
-    setFeedbackState("idle");
     setSessionState("ended");
 
-    const gen = Array.from({ length: 12 }, (_, i) => Math.min(86, 32 + i * 2 + Math.round(Math.random() * 18)));
-    const avg = gen.reduce((s, v) => s + v, 0) / gen.length / 100;
-    const { peakValue, peakBin, peakPhase, mostStressfulPhase } = summarizeTimeline(gen);
-    setTimeline(gen);
+    const sessionTimeline = buildSessionTimeline(stressHistoryRef.current);
+    const avg = sessionTimeline.reduce((s, v) => s + v, 0) / sessionTimeline.length / 100;
+    const { peakValue, peakBin, peakPhase, mostStressfulPhase } = summarizeTimeline(sessionTimeline);
+    setTimeline(sessionTimeline);
 
     const nextReport: ReportSummary = {
       peakValue,
@@ -542,6 +622,7 @@ export function DashboardShell() {
     setSessionTitle(`${t(`scene.${selectedScene}.label`, activeScene.label)} ${t("save.defaultSuffix")}`);
     setSaved(false);
     setSaveStatus("");
+    setSaveDialogOpen(true);
     setChatMessages([{ role: "agent", text: t("report.chatSummaryPrefix") + t("report.nextActionText") }]);
   }
 
@@ -571,9 +652,12 @@ export function DashboardShell() {
         diagnosis: englishDiagnosis,
         nextAction: englishNextAction,
         sceneLabel: activeScene.label,
+        timeline,
+        video: saveVideo ? recordedVideo : null,
       });
       setSaved(true);
       setSaveStatus(t("status.saved"));
+      setSaveDialogOpen(false);
     } catch (error) {
       setSaveStatus(error instanceof Error ? error.message : t("status.saveFailed"));
     }
@@ -585,6 +669,13 @@ export function DashboardShell() {
     const reply = buildAgentReply(userText, t, peakText(report));
     setChatMessages((prev) => [...prev, { role: "user", text: userText }, { role: "agent", text: reply }]);
     setChatInput("");
+  }
+
+  function seekToTimelineBin(bin: number) {
+    const video = sessionVideoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    video.currentTime = ((bin + 0.5) / 12) * video.duration;
+    void video.play().catch(() => undefined);
   }
 
   function renderStageVisual() {
@@ -662,13 +753,6 @@ export function DashboardShell() {
     sessionState === "error" ? "chip-error" :
     "chip-idle";
 
-  const liveCue =
-    feedbackMode === "silent"
-      ? t("fb.idle")
-      : feedbackMode === "active" && !(feedbackState === "high" || feedbackState === "mid")
-      ? t("fb.activeQuiet")
-      : t(`fb.${feedbackState}`);
-
   const activeSceneLabel = t(`scene.${activeScene.id}.label`, activeScene.label);
   const activeSceneDesc = t(`scene.${activeScene.id}.desc`, activeScene.description);
 
@@ -736,18 +820,6 @@ export function DashboardShell() {
             <FileText size={14} />
             {t("btn.useSample")}
           </button>
-          <div className="feedback-toggle" aria-label="Feedback mode">
-            {(["silent", "gentle", "active"] as FeedbackMode[]).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                className={feedbackMode === mode ? "active" : ""}
-                onClick={() => setFeedbackMode(mode)}
-              >
-                {t(`mode.${mode}`)}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -768,7 +840,7 @@ export function DashboardShell() {
                 <span className="status-dot" />
                 {stateLabel}
               </span>
-              <span className="live-cue">{sessionState === "live" ? liveCue : activeSceneDesc}</span>
+              {sessionState !== "live" && <span className="live-cue">{activeSceneDesc}</span>}
               <span style={{ fontSize: 12, opacity: 0.8 }}>{formatSeconds(elapsed)}</span>
             </div>
           </div>
@@ -827,34 +899,7 @@ export function DashboardShell() {
               {t("signal.liveStress")}
             </div>
             <div className={`signal-value ${sessionState === "live" ? (stressScore > 0.65 ? "alert" : "ok") : "data"}`}>
-              {sessionState === "live" ? (feedbackMode === "silent" ? t("val.hidden") : stressScore.toFixed(2)) : t("val.stby")}
-            </div>
-          </div>
-
-          <div className="signal-card signal-card-wide">
-            <div className="signal-label">
-              <MessageSquareText size={11} style={{ display: "inline", marginRight: 4 }} />
-              {t("signal.feedbackState")}
-            </div>
-            <div
-              className={`signal-value ${
-                sessionState !== "live"
-                  ? "data"
-                  : feedbackMode === "silent"
-                  ? "data"
-                  : feedbackState === "high"
-                  ? "alert"
-                  : feedbackState === "mid"
-                  ? "warn"
-                  : "ok"
-              }`}
-              style={{ fontSize: 14, lineHeight: 1.35 }}
-            >
-              {sessionState !== "live"
-                ? t("val.stby")
-                : feedbackMode === "silent"
-                ? t("val.hidden")
-                : `${FEEDBACK_LABELS[feedbackState]} · ${t(`fb.${feedbackState}`)}`}
+              {sessionState === "live" ? stressScore.toFixed(2) : t("val.stby")}
             </div>
           </div>
 
@@ -886,6 +931,31 @@ export function DashboardShell() {
                 <Waves size={16} color="var(--text-secondary)" />
               </div>
               <StressChart series={timeline} />
+              {recordedVideoUrl && (
+                <div className="session-video-review">
+                  <video ref={sessionVideoRef} controls playsInline src={recordedVideoUrl} />
+                  <div className="video-timeline-label">
+                    {lang === "ko" ? "구간을 누르면 해당 영상 위치로 이동합니다" : "Select a segment to jump to that moment"}
+                  </div>
+                  <div className="video-timeline" aria-label="Stress timeline linked to video">
+                    {timeline.map((value, bin) => (
+                      <button
+                        key={bin}
+                        type="button"
+                        className={value >= 70 ? "high" : value >= 50 ? "mid" : "low"}
+                        style={{ flex: Math.max(value, 20) }}
+                        onClick={() => seekToTimelineBin(bin)}
+                        title={`${lang === "ko" ? "스트레스" : "Stress"} ${value}%`}
+                      />
+                    ))}
+                  </div>
+                  <div className="video-timeline-legend">
+                    <span><i className="low" />{lang === "ko" ? "좋음" : "Good"}</span>
+                    <span><i className="mid" />{lang === "ko" ? "보완 필요" : "Needs attention"}</span>
+                    <span><i className="high" />{lang === "ko" ? "스트레스 높음" : "High stress"}</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="card">
@@ -1020,6 +1090,33 @@ export function DashboardShell() {
             </div>
           </div>
         </>
+      )}
+      {saveDialogOpen && report && (
+        <div className="save-modal-backdrop" role="presentation">
+          <section className="save-modal" role="dialog" aria-modal="true" aria-labelledby="save-session-title">
+            <button type="button" className="save-modal-close" onClick={() => setSaveDialogOpen(false)} aria-label="Close">
+              <X size={18} />
+            </button>
+            <span className="save-modal-eyebrow">{lang === "ko" ? "세션 완료" : "Session complete"}</span>
+            <h2 id="save-session-title">{lang === "ko" ? "이번 세션을 저장할까요?" : "Save this session?"}</h2>
+            <p>{lang === "ko" ? "영상이 없어도 분석 결과와 스트레스 타임라인은 기록에 저장됩니다." : "Your analysis and stress timeline are saved even without a video."}</p>
+            <label className="save-modal-field">
+              <span>{lang === "ko" ? "세션 이름" : "Session name"}</span>
+              <input value={sessionTitle} onChange={(event) => setSessionTitle(event.target.value)} placeholder={t("save.namePlaceholder")} />
+            </label>
+            <label className="save-video-option">
+              <input className="save-video-checkbox" type="checkbox" checked={saveVideo} onChange={(event) => setSaveVideo(event.target.checked)} disabled={recordingFinalizing} />
+              <span>
+                <strong>{lang === "ko" ? "녹화 영상도 함께 저장" : "Include recorded video"}</strong>
+                <small>{recordingFinalizing ? (lang === "ko" ? "영상 준비 중... 기록은 영상 없이도 저장할 수 있습니다." : "Preparing video... You can still save the record without it.") : recordedVideo ? (lang === "ko" ? "체크하면 영상과 타임라인을 함께 저장합니다." : "When checked, the video and timeline are saved together.") : (lang === "ko" ? "이번 세션의 영상이 없어 기록과 타임라인만 저장됩니다." : "No video is available for this session; only the record and timeline will be saved.")}</small>
+              </span>
+            </label>
+            <div className="save-modal-actions">
+              <button type="button" className="btn btn-outline" onClick={() => setSaveDialogOpen(false)}>{lang === "ko" ? "저장하지 않기" : "Don't save"}</button>
+              <button type="button" className="btn btn-primary" onClick={handleSaveSession} disabled={!sessionTitle.trim()}>{lang === "ko" ? "저장하기" : "Save session"}</button>
+            </div>
+          </section>
+        </div>
       )}
     </main>
   );

@@ -23,11 +23,22 @@ export const SIGNAL_SOURCE: SignalSource =
 export const INFERENCE_URL =
   process.env.NEXT_PUBLIC_INFERENCE_URL ?? "http://localhost:8000";
 
-// POST a single webcam frame to the inference server and get a real model frame.
-export async function inferFrame(imageBlob: Blob): Promise<LiveInferenceFrame> {
+// POST the model's required 16-frame video sequence plus 16 kHz PCM audio.
+export async function inferMultimodalFrame(
+  frames: Blob[],
+  audio: Float32Array,
+  task = "Speaking",
+  signal?: AbortSignal,
+): Promise<LiveInferenceFrame> {
   const form = new FormData();
-  form.append("frame", imageBlob, "frame.jpg");
-  const res = await fetch(`${INFERENCE_URL}/infer`, { method: "POST", body: form });
+  frames.forEach((frame, index) => form.append("frames", frame, `frame-${index}.jpg`));
+  // Copy into a browser-owned ArrayBuffer: Float32Array.buffer may be a
+  // SharedArrayBuffer in newer TypeScript DOM typings, which Blob cannot take.
+  const pcm = new Float32Array(audio.length);
+  pcm.set(audio);
+  form.append("audio", new Blob([pcm.buffer], { type: "application/octet-stream" }), "audio.f32");
+  form.append("task", task);
+  const res = await fetch(`${INFERENCE_URL}/infer`, { method: "POST", body: form, signal });
   if (!res.ok) throw new Error(`Inference failed: ${res.status}`);
   const data = await res.json();
   return {

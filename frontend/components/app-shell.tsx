@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { BarChart3, Bell, HelpCircle, Languages, LogOut, Search, Settings, UserRound, Video } from "lucide-react";
+import { BarChart3, Bell, ClipboardList, HelpCircle, Languages, LogOut, Search, Settings, UserRound, Video } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { useSupabaseAuth } from "@/components/supabase-provider";
 import { useLang } from "@/lib/i18n";
@@ -11,6 +11,7 @@ import { useLang } from "@/lib/i18n";
 const navLinks = [
   { href: "/dashboard", key: "nav.dashboard", icon: BarChart3 },
   { href: "/practice", key: "nav.practice", icon: Video },
+  { href: "/history", key: "nav.history", icon: ClipboardList },
   { href: "/settings", key: "nav.settings", icon: Settings },
 ];
 

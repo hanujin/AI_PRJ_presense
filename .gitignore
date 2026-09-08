@@ -41,6 +41,8 @@ frontend/public/samples/
 .env
 .env.example
 .env.local
+# A non-secret template may be committed; real .env files remain ignored.
+!server/.env.example
 
 .obsidian/
 .document/

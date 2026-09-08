@@ -18,8 +18,22 @@ create table if not exists public.presentation_records (
   diagnosis text not null,
   next_action text not null default '',
   scene_label text not null default '',
+  timeline jsonb not null default '[]'::jsonb,
+  video_path text,
   created_at timestamptz not null default timezone('utc', now())
 );
+
+alter table public.presentation_records add column if not exists timeline jsonb not null default '[]'::jsonb;
+alter table public.presentation_records add column if not exists video_path text;
+
+insert into storage.buckets (id, name, public)
+values ('session-videos', 'session-videos', false)
+on conflict (id) do nothing;
+
+create policy "Users can manage their own session videos"
+on storage.objects for all to authenticated
+using (bucket_id = 'session-videos' and (storage.foldername(name))[1] = (select auth.uid()::text))
+with check (bucket_id = 'session-videos' and (storage.foldername(name))[1] = (select auth.uid()::text));
 
 create table if not exists public.diagnosis_history (
   id uuid primary key default gen_random_uuid(),
