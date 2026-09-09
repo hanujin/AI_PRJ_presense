@@ -1361,7 +1361,16 @@ h1, h2, h3 { margin: 0; }
 .video-timeline-legend i { width: 8px; height: 8px; border-radius: 50%; }
 
 .save-modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgb(9 20 35 / 68%); backdrop-filter: blur(4px); }
-.save-modal { position: relative; width: min(100%, 460px); padding: 28px; border: 1px solid var(--border); border-radius: 16px; background: var(--card); box-shadow: 0 24px 60px rgb(0 0 0 / 28%); }
+.save-modal { position: relative; width: min(100%, 460px); padding: 28px; border: 1px solid var(--border); border-radius: 16px; background: #ffffff; color: var(--text-primary); box-shadow: 0 24px 60px rgb(0 0 0 / 28%); }
+.save-complete-dialog { margin: auto; width: min(460px, calc(100% - 32px)); }
+.save-complete-dialog::backdrop { background: rgb(9 20 35 / 68%); backdrop-filter: blur(4px); }
+.preparation-dialog { margin: auto; width: min(560px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.preparation-dialog::backdrop { background: rgb(9 20 35 / 68%); backdrop-filter: blur(4px); }
+.preparation-video { display: block; width: 100%; height: 170px; object-fit: contain; background: #0f1d2e; border-radius: 10px; }
+.preparation-script { margin: 16px 0; padding: 16px; background: var(--accent-light); border-left: 3px solid var(--accent); border-radius: 8px; line-height: 1.7; font-weight: 600; }
+.preparation-checks { margin: 14px 0; padding-left: 20px; font-size: 13px; line-height: 1.8; }
+.preparation-dialog .preparation-privacy { font-size: 12px; margin-bottom: 12px; }
+.preparation-dialog .preparation-status { margin: 14px 0 0; font-size: 13px; }
 .save-modal-close { position: absolute; top: 12px; right: 12px; padding: 5px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
 .save-modal-eyebrow { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .save-modal h2 { margin: 8px 0; font-size: 22px; }.save-modal p { margin: 0 0 20px; color: var(--text-secondary); line-height: 1.55; }
@@ -1677,6 +1686,15 @@ h1, h2, h3 { margin: 0; }
 .highlight-card p { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
 
 /* ─── Stress chart ─── */
+.stress-line-chart { margin: 14px 0 4px; width: 100%; min-width: 0; }
+.stress-line-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.stress-line-chart figcaption { text-align: center; color: var(--text-secondary); font-size: 11px; margin-top: 8px; }
+.stress-line-grid { stroke: var(--border); stroke-width: 1; }
+.stress-line-divider { stroke: var(--border); stroke-dasharray: 4 4; }
+.stress-line-label { fill: var(--text-secondary); font-size: 12px; }
+.stress-line-path { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.stress-line-point { fill: var(--surface); stroke: var(--accent); stroke-width: 2; }
+.stress-line-point:hover { fill: var(--accent); r: 6; }
 .stress-chart-wrap {
   height: 180px;
   display: grid;

@@ -5,14 +5,15 @@ archive/
 *.npy
 *.pt
 
-# UI (Teammate's work - ignore in this branch)
-frontend/
+# Frontend build artifacts (the source itself must be versioned)
 node_modules/
 .next/
 .env*
 
 # Standard Python ignores
 __pycache__/
+.venv/
+venv/
 ...
 *$py.class
 
@@ -33,6 +34,18 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/tsconfig.tsbuildinfo
+
+# Local server output and development logs
+server/*.log
+*.log
+
+# Model weights are deployed to the inference host separately, never committed.
+models/
+*.ckpt
+*.pth
+*.onnx
+*.safetensors
+*.h5
 
 # Progress Report PDF — contains personal info (names, emails, phone numbers),
 # and is no longer used by the app. Do not publish.

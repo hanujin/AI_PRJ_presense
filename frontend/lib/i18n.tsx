@@ -228,14 +228,27 @@ const dict: Record<string, { ko: string; en: string }> = {
     en: "Demo signal — stress & confidence are simulated until the Student-model inference backend is connected.",
   },
   "note.liveError": {
-    ko: "라이브 모델: 추론 서버에 연결할 수 없습니다 — 백엔드가 설정된 주소에서 실행 중인가요?",
-    en: "Live model: inference server unreachable — is the backend running on the configured URL?",
+    ko: "분석 요청에 실패했거나 응답 시간이 초과됐습니다. 서버 실행 상태와 주소를 확인해 주세요.",
+    en: "Analysis failed or timed out. Check the server status and URL.",
   },
   "note.liveOk": {
-    ko: "라이브 모델: Student 모델 추론 서버에 연결됨 (checkpoint 로드 전까지는 미학습).",
-    en: "Live model: connected to the Student-model inference server (untrained until a checkpoint is loaded).",
+    ko: "모델 서버에 연결됨 · 실제 모델 분석 결과를 수신하고 있습니다.",
+    en: "Connected to the model server · Receiving model analysis results.",
   },
-  "note.liveConnecting": { ko: "라이브 모델: 추론 서버에 연결 중…", en: "Live model: connecting to the inference server…" },
+  "note.liveVerified": {
+    ko: "모델 서버 연결 확인 완료 · 마지막 분석 요청 기준",
+    en: "Model connection verified on the last analysis request.",
+  },
+  "note.liveIdle": { ko: "연습을 시작하면 영상·음성을 수집해 분석합니다.", en: "Start practice to collect video and audio for analysis." },
+  "note.preparation": { ko: "카메라·마이크로 분석 준비 데이터를 미리 수집합니다. 시작 전에는 브라우저에만 임시 보관하며, 연습을 시작하면 분석 서버로 전송합니다.", en: "We collect camera and microphone data for preparation. It stays temporarily in your browser until practice starts, when it is sent for analysis." },
+  "note.preparationFrames": { ko: "영상 준비", en: "Video preparation" },
+  "note.preparationAudioOn": { ko: "마이크 수집 중", en: "Collecting audio" },
+  "note.preparationAudioOff": { ko: "마이크 준비 대기", en: "Audio preparation pending" },
+  "note.prepareButton": { ko: "카메라·마이크 준비", en: "Prepare camera and microphone" },
+  "note.liveCollecting": { ko: "첫 분석을 위한 영상·음성 수집 중 · 약 10초 후 분석 요청", en: "Collecting video and audio · First analysis requested after about 10 seconds" },
+  "note.liveAnalyzing": { ko: "영상·음성 분석 중… 첫 결과는 시간이 걸릴 수 있습니다.", en: "Analyzing video and audio… The first result may take a while." },
+  "note.liveCamera": { ko: "카메라 영상을 기다리는 중입니다. 카메라 권한과 미리보기를 확인해 주세요.", en: "Waiting for video. Check camera permission and preview." },
+  "note.liveAudio": { ko: "마이크 데이터를 기다리는 중입니다. 마이크 권한을 확인해 주세요.", en: "Waiting for audio. Check microphone permission." },
 
   // Slides / deck
   "slide.hint": { ko: "← / → 키로 슬라이드 이동", en: "Use ← / → keys to move between slides" },
