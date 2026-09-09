@@ -24,7 +24,7 @@ const dict: Record<string, { ko: string; en: string }> = {
   "lang.toggle": { ko: "언어 전환", en: "Toggle language" },
 
   // ── Auth ──
-  "auth.headline": { ko: "더 똑똑하게 연습하고,\n더 잘 발표하세요.", en: "Practice smarter, present better." },
+  "auth.headline": { ko: "더 똑똑하게 연습하고,\n더 잘 발표하세요.", en: "Practice smarter,\npresent better." },
   "auth.desc": {
     ko: "웹캠과 마이크만으로 실시간 스트레스 감지하는 플랫폼",
     en: "Real-time stress detection platform\nfrom your webcam and microphone",
